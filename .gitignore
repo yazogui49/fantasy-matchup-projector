@@ -1,0 +1,6 @@
+.venv/
+.env
+oauth2.json
+cache/
+__pycache__/
+*.pyc

@@ -1,0 +1,4 @@
+yahoo_oauth
+yahoo_fantasy_api
+python-dotenv
+nba_api
