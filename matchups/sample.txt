@@ -1,0 +1,30 @@
+# Made-up matchup for testing. One player per line; names are fuzzy-matched.
+[me]
+Jalen Brunson
+Shai Gilgeous-Alexander
+Devin Booker
+Tyrese Maxey
+Mikal Bridges
+Jayson Tatum
+Paolo Banchero
+Scottie Barnes
+Evan Mobley
+Bam Adebayo
+Domantas Sabonis
+Derrick White
+LeBron James
+
+[opponent]
+Luka Doncic
+Anthony Edwards
+Trae Young
+Jamal Murray
+Cade Cunningham
+Kevin Durant
+Giannis Antetokounmpo
+Jalen Johnson
+Franz Wagner
+Victor Wembanyama
+Nikola Jokic
+Karl-Anthony Towns
+Jaren Jackson Jr.

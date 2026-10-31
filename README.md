@@ -11,36 +11,32 @@ data stays on my own machine.
 
 ## How it works
 
-1. Reads the league's scoring categories (not hardcoded; FG%/FT% projected from makes and attempts).
-2. Pulls the current week's matchup: both rosters, stats so far, and active lineup slots.
-3. Counts each player's remaining games this week from the NBA schedule.
-4. Projects the rest of the week (per-game average × games remaining; configurable window).
-5. Adds the projections to current stats and compares category by category.
+1. Pick both rosters (searchable list of every NBA player, from ESPN).
+2. Stats so far this week come from real box scores; the rest of the week is
+   per-game average × games remaining (choose: this season, last 30 days, last season, ...).
+3. Daily starting-slot limits are applied (PG SG G G SF PF F F C C), and FG%/FT%
+   are projected from makes and attempts, never averaged percentages.
+4. Category-by-category comparison; anything within 5% is a toss-up.
+5. Per-player games override for injuries/rest, and a next-week view.
 
-Output is structured JSON, rendered as a table:
+Yahoo integration (real rosters, lineups and totals) is waiting on Yahoo Fantasy API approval.
 
-```
-category | me | opponent | projected winner | margin %
-...
-Projected 5-3-1
-```
-
-## Usage
+## Run it
 
 ```
-python project.py --league <league_id> --window last14
+python -m venv .venv && .venv/bin/pip install -r requirements.txt
+.venv/bin/streamlit run app.py              # web app
+.venv/bin/python project.py --matchup matchups/sample.txt --window last30   # command line
 ```
 
-## Status
+Your rosters and settings are kept in the page URL, so bookmark it to keep them.
+Data comes from ESPN's public endpoints and is cached in `cache/`.
 
-Work in progress. Yahoo auth is set up; the projection modules are being built
-step by step.
+## Code
 
-## Setup
-
-1. Create a Yahoo developer app with Fantasy Sports read permission and redirect URI `https://localhost:8080`.
-2. `cp .env.example .env` and fill in the client ID and secret.
-3. `python -m venv .venv && .venv/bin/pip install -r requirements.txt`
-4. `.venv/bin/python project.py --check-auth`
-
-Credentials (`.env`) and tokens (`oauth2.json`) are gitignored and never committed.
+- `projector/schedule.py`: NBA schedule, games remaining in the fantasy week
+- `projector/players.py`: player directory and name search
+- `projector/stats.py`: game logs, averages per window, week-to-date totals
+- `projector/projection.py`: projection, slot limits, category comparison (JSON result)
+- `projector/output.py`: text table; `app.py`: Streamlit UI
+- `projector/auth.py`: Yahoo OAuth (for when API access is approved)

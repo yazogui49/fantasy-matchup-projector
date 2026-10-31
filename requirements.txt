@@ -1,4 +1,7 @@
+requests
+streamlit
+pandas
+tzdata
+python-dotenv
 yahoo_oauth
 yahoo_fantasy_api
-python-dotenv
-nba_api
