@@ -188,39 +188,115 @@ with st.expander("Games each player plays (injuries, rest)", expanded=False):
 
 save({"me": me_ids, "opponent": opp_ids, "window": window, "games": st.session_state["games"]})
 
-result = run_projection(tuple(me_ids), tuple(opp_ids), preset, window, as_of,
-                        tuple(sorted(week_games.items())))
+games_key = tuple(sorted(week_games.items()))
+result = run_projection(tuple(me_ids), tuple(opp_ids), preset, window, as_of, games_key)
 summary = result["summary"]
+WINNER_TEXT = {"me": "Me", "opponent": "Opponent", "toss-up": "Toss-up"}
 
-st.subheader(summary["text"])
+
+def styled_winner(df: pd.DataFrame, winners: list[str], column: str):
+    return df.style.apply(
+        lambda col: [f"color: {WINNER_COLORS[w]}; font-weight: 600" for w in winners],
+        subset=[column])
+
+
+def remaining_starts(res: dict) -> int:
+    return sum(d["starting"] for d in res["teams"]["me"]["daily"] if not d["past"])
+
+
+st.subheader(f"{summary['text']} · expected {summary['expected_wins']} categories")
 when = "nothing played yet, all games projected" if week == "next" else f"as of {result['as_of']}"
 st.caption(f"Week {result['week']['start']} to {result['week']['end']} · {when}"
            f" · using {WINDOW_LABELS[window].lower()} stats")
 
-c1, c2, c3 = st.columns(3)
-c1.metric("Winning", summary["wins"])
-c2.metric("Losing", summary["losses"])
-c3.metric("Toss-ups", summary["toss_ups"])
+tab_matchup, tab_days, tab_whatif, tab_players = st.tabs(["Matchup", "Days", "What if", "Players"])
 
-now = {r["category"]: r for r in result["current_categories"]}
-table = pd.DataFrame([{
-    "Category": r["category"],
-    "Me": fmt(r["me"], r["is_pct"]),
-    "Opponent": fmt(r["opponent"], r["is_pct"]),
-    "Projected winner": {"me": "Me", "opponent": "Opponent", "toss-up": "Toss-up"}[r["winner"]],
-    "Margin %": f"{r['margin_pct']:.1f}",
-    "So far (me–opp)": f"{fmt(now[r['category']]['me'], r['is_pct'])} – "
-                       f"{fmt(now[r['category']]['opponent'], r['is_pct'])}",
-} for r in result["categories"]])
-if week == "next":
-    table = table.drop(columns="So far (me–opp)")
-winners = [r["winner"] for r in result["categories"]]
-styled = table.style.apply(
-    lambda col: [f"color: {WINNER_COLORS[w]}; font-weight: 600" for w in winners],
-    subset=["Projected winner"])
-st.dataframe(styled, hide_index=True, width="stretch")
+with tab_matchup:
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Winning", summary["wins"])
+    c2.metric("Losing", summary["losses"])
+    c3.metric("Toss-ups", summary["toss_ups"])
 
-with st.expander("Player breakdown"):
+    now = {r["category"]: r for r in result["current_categories"]}
+    table = pd.DataFrame([{
+        "Category": r["category"],
+        "Me": fmt(r["me"], r["is_pct"]),
+        "Opponent": fmt(r["opponent"], r["is_pct"]),
+        "Win chance": f"{r['win_prob']:.0%}",
+        "Projected winner": WINNER_TEXT[r["winner"]],
+        "Margin %": f"{r['margin_pct']:.1f}",
+        "So far (me–opp)": f"{fmt(now[r['category']]['me'], r['is_pct'])} – "
+                           f"{fmt(now[r['category']]['opponent'], r['is_pct'])}",
+    } for r in result["categories"]])
+    if week == "next":
+        table = table.drop(columns="So far (me–opp)")
+    st.dataframe(styled_winner(table, [r["winner"] for r in result["categories"]], "Projected winner"),
+                 hide_index=True, width="stretch")
+    st.caption("Win chance: the rest of the week replayed 2,000 times, drawing each game from "
+               "the player's real games in the chosen window. 40–60% counts as a toss-up.")
+
+with tab_days:
+    st.caption(f"Players with a game each day vs your {len(settings.starting_slots)} starting "
+               "slots. **Open** slots are where a pickup adds full games; on full days an extra "
+               "player just sits.")
+    day_rows = []
+    for mine, theirs in zip(result["teams"]["me"]["daily"], result["teams"]["opponent"]["daily"]):
+        day_rows.append({
+            "Day": date.fromisoformat(mine["date"]).strftime("%a %b %-d") + (" ✓" if mine["past"] else ""),
+            "My games": mine["with_games"], "My starts": mine["starting"], "My open": mine["open_slots"],
+            "Opp games": theirs["with_games"], "Opp starts": theirs["starting"],
+            "My benched": ", ".join(mine["benched"]),
+        })
+    days_df = pd.DataFrame(day_rows)
+    st.dataframe(days_df.style.apply(
+        lambda col: ["background-color: rgba(26,127,55,.15)" if v > 0 else "" for v in col],
+        subset=["My open"]), hide_index=True, width="stretch")
+    totals = {side: sum(d["starting"] for d in result["teams"][side]["daily"])
+              for side in ("me", "opponent")}
+    st.caption(f"✓ = already played. Total starts this week: me {totals['me']}, "
+               f"opponent {totals['opponent']}.")
+
+with tab_whatif:
+    st.caption("Try a roster move and see the matchup with it. Your real roster isn't changed.")
+    on_rosters = set(me_ids) | set(opp_ids)
+    w1, w2 = st.columns(2)
+    with w1:
+        drops = st.multiselect("Drop", me_ids, format_func=label, key="wi_drop")
+    with w2:
+        adds = st.multiselect("Add", [i for i in directory if i not in on_rosters],
+                              format_func=label, key="wi_add", placeholder="Type a name…")
+    if not drops and not adds:
+        st.info("Pick a player to add and/or one to drop.")
+    else:
+        new_me = [i for i in me_ids if i not in drops] + adds
+        if len(new_me) > roster_size:
+            st.warning(f"That's {len(new_me)} players, over your {roster_size}-man roster.")
+        alt = run_projection(tuple(new_me), tuple(opp_ids), preset, window, as_of, games_key)
+        a_sum = alt["summary"]
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Result", a_sum["text"].replace("Projected ", ""),
+                  f"was {summary['text'].replace('Projected ', '')}", delta_color="off")
+        m2.metric("Expected categories", a_sum["expected_wins"],
+                  round(a_sum["expected_wins"] - summary["expected_wins"], 1))
+        m3.metric("Starts left this week", remaining_starts(alt),
+                  remaining_starts(alt) - remaining_starts(result))
+
+        rows = []
+        for before, after in zip(result["categories"], alt["categories"]):
+            rows.append({
+                "Category": after["category"],
+                "Me now": fmt(before["me"], before["is_pct"]),
+                "Me with move": fmt(after["me"], after["is_pct"]),
+                "Opponent": fmt(after["opponent"], after["is_pct"]),
+                "Win chance": f"{before['win_prob']:.0%} → {after['win_prob']:.0%}",
+                "Change": f"{(after['win_prob'] - before['win_prob']) * 100:+.0f} pts",
+                "Projected winner": WINNER_TEXT[after["winner"]],
+            })
+        st.dataframe(styled_winner(pd.DataFrame(rows), [r["winner"] for r in alt["categories"]],
+                                   "Projected winner"), hide_index=True, width="stretch")
+        st.caption("Added players play all their team's remaining games unless they're Out.")
+
+with tab_players:
     for side, title in (("me", "My team"), ("opponent", "Opponent")):
         st.markdown(f"**{title}**")
         st.dataframe(pd.DataFrame([{

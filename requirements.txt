@@ -1,6 +1,7 @@
 requests
 streamlit
 pandas
+numpy
 tzdata
 python-dotenv
 yahoo_oauth

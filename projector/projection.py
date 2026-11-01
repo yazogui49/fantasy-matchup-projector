@@ -4,11 +4,14 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
 
+import numpy as np
+
 from .league import SLOT_ELIGIBILITY, LeagueSettings
 from .schedule import fantasy_week, nba_today, remaining_games
 from .stats import STATS, averages, game_log, played_by
 
-TOSS_UP_PCT = 5.0
+SIMULATIONS = 2000
+TOSS_UP = (0.40, 0.60)  # win chance inside this band = toss-up
 
 
 def _starters(candidates: list[dict], slots: list[str]) -> set[str]:
@@ -59,6 +62,7 @@ def _project_team(roster: list[dict], settings: LeagueSettings, window: str,
     # Who starts when more players have games than there are slots: most minutes first.
     priority = sorted(players, key=lambda p: p["avg"]["per_game"]["min"], reverse=True)
 
+    daily = []
     day = monday
     while day <= sunday:
         d = day.isoformat()
@@ -75,6 +79,14 @@ def _project_team(roster: list[dict], settings: LeagueSettings, window: str,
                 p["games_remaining"] += 1
                 for s in STATS:
                     p["projected_rest"][s] += p["avg"]["per_game"][s]
+        daily.append({
+            "date": d,
+            "past": d < today.isoformat(),
+            "with_games": len(playing),
+            "starting": len(starting),
+            "benched": [p["name"] for p in playing if p["id"] not in starting],
+            "open_slots": len(settings.starting_slots) - len(starting),
+        })
         day += timedelta(days=1)
 
     current = {s: sum(p["current"][s] for p in players) for s in STATS}
@@ -82,6 +94,7 @@ def _project_team(roster: list[dict], settings: LeagueSettings, window: str,
     return {
         "current": current,
         "final": {s: current[s] + rest[s] for s in STATS},
+        "daily": daily,
         "players": [{
             "id": p["id"], "name": p["name"], "team": p["team"],
             "positions": p["positions"], "injury": p.get("injury"),
@@ -91,21 +104,52 @@ def _project_team(roster: list[dict], settings: LeagueSettings, window: str,
             "games_assumed": len(p["upcoming"]),
             "current": p["current"], "projected_rest": p["projected_rest"],
         } for p in players],
+        # Not part of the JSON result: each starter's remaining games and the real
+        # games to resample them from, for simulate().
+        "_sim": [(p["games_remaining"], p["avg"]["pool"]) for p in players],
     }
 
 
+def simulate(team: dict, rng: np.random.Generator, n: int = SIMULATIONS) -> np.ndarray:
+    """n possible end-of-week totals (n x len(STATS)): stats so far plus, for each
+    remaining start, one of the player's real games from the window, drawn at random."""
+    totals = np.tile(np.array([team["current"][s] for s in STATS]), (n, 1))
+    for starts, pool in team["_sim"]:
+        if starts and pool:
+            games = np.array([[g.get(s, 0.0) for s in STATS] for g in pool])
+            totals += games[rng.integers(0, len(games), size=(n, starts))].sum(axis=1)
+    return totals
+
+
+def _category_values(cat, totals: np.ndarray) -> np.ndarray:
+    col = {s: i for i, s in enumerate(STATS)}
+    if cat.is_pct:
+        made, att = totals[:, col[cat.made]], totals[:, col[cat.attempted]]
+        return np.divide(made, att, out=np.zeros_like(made), where=att > 0)
+    return totals[:, col[cat.stat]]
+
+
 def compare(settings: LeagueSettings, mine: dict, theirs: dict,
-            toss_up_pct: float = TOSS_UP_PCT) -> list[dict]:
+            sims: tuple[np.ndarray, np.ndarray] | None = None) -> list[dict]:
+    """Category rows. With simulations, the winner comes from the win chance
+    (toss-up inside TOSS_UP); without, from which projected total is better."""
     rows = []
     for cat in settings.categories:
         a, b = cat.value(mine), cat.value(theirs)
         margin = abs(a - b) / max(abs(a), abs(b)) * 100 if max(abs(a), abs(b)) else 0.0
-        if margin <= toss_up_pct:
-            winner = "toss-up"
+        row = {"category": cat.name, "is_pct": cat.is_pct, "me": a, "opponent": b,
+               "margin_pct": round(margin, 1)}
+        if sims is not None:
+            va, vb = _category_values(cat, sims[0]), _category_values(cat, sims[1])
+            better = va > vb if cat.higher_is_better else va < vb
+            prob = float(np.mean(better) + 0.5 * np.mean(va == vb))
+            row["win_prob"] = round(prob, 3)
+            row["winner"] = ("toss-up" if TOSS_UP[0] <= prob <= TOSS_UP[1]
+                             else "me" if prob > TOSS_UP[1] else "opponent")
         else:
-            winner = "me" if (a > b) == cat.higher_is_better else "opponent"
-        rows.append({"category": cat.name, "is_pct": cat.is_pct, "me": a, "opponent": b,
-                     "winner": winner, "margin_pct": round(margin, 1)})
+            row["winner"] = ("toss-up" if a == b
+                             else "me" if (a > b) == cat.higher_is_better else "opponent")
+        rows.append(row)
     return rows
 
 
@@ -117,11 +161,17 @@ def project_matchup(me: list[dict], opponent: list[dict], settings: LeagueSettin
     remaining = remaining_games(today)
     teams = {side: _project_team(roster, settings, window, today, monday, sunday, remaining)
              for side, roster in (("me", me), ("opponent", opponent))}
-    categories = compare(settings, teams["me"]["final"], teams["opponent"]["final"])
+    rng = np.random.default_rng(0)  # fixed seed: same inputs give the same chances
+    sims = (simulate(teams["me"], rng), simulate(teams["opponent"], rng))
+    for team in teams.values():
+        del team["_sim"]
+
+    categories = compare(settings, teams["me"]["final"], teams["opponent"]["final"], sims)
     current = compare(settings, teams["me"]["current"], teams["opponent"]["current"])
     wins = sum(r["winner"] == "me" for r in categories)
     losses = sum(r["winner"] == "opponent" for r in categories)
     ties = len(categories) - wins - losses
+    expected = sum(r["win_prob"] for r in categories)
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "league": settings.name,
@@ -131,6 +181,7 @@ def project_matchup(me: list[dict], opponent: list[dict], settings: LeagueSettin
         "categories": categories,
         "current_categories": current,
         "summary": {"wins": wins, "losses": losses, "toss_ups": ties,
+                    "expected_wins": round(expected, 1),
                     "text": f"Projected {wins}-{losses}-{ties}"},
         "teams": teams,
     }

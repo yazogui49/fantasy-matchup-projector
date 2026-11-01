@@ -9,9 +9,9 @@ def fmt(value: float, is_pct: bool) -> str:
 
 
 def render_table(result: dict) -> str:
-    header = ("category", "me", "opponent", "projected winner", "margin %")
+    header = ("category", "me", "opponent", "projected winner", "margin %", "win %")
     rows = [(r["category"], fmt(r["me"], r["is_pct"]), fmt(r["opponent"], r["is_pct"]),
-             WINNER_LABEL[r["winner"]], f"{r['margin_pct']:.1f}")
+             WINNER_LABEL[r["winner"]], f"{r['margin_pct']:.1f}", f"{r['win_prob']:.0%}")
             for r in result["categories"]]
     widths = [max(len(str(x)) for x in col) for col in zip(header, *rows)]
 
@@ -23,7 +23,7 @@ def render_table(result: dict) -> str:
            f" · as of {result['as_of']} · window: {result['window']}", "",
            line(header), "-+-".join("-" * w for w in widths)]
     out += [line(r) for r in rows]
-    out += ["", result["summary"]["text"]]
+    out += ["", f"{result['summary']['text']} (expected {result['summary']['expected_wins']} categories)"]
     return "\n".join(out)
 
 

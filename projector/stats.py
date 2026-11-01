@@ -76,7 +76,7 @@ def _sum(games: list[dict]) -> dict[str, float]:
 def averages(player_id: str, window: str = "season", today: date | None = None) -> dict:
     """Per-game averages over the window. An empty window falls back to the full
     season, then last season (for "lastseason": to this season, e.g. rookies).
-    Reports which source it used."""
+    Reports which source it used, and the games averaged ("pool", for simulation)."""
     today = today or nba_today()
     last_season = today.year - 1 if today.month < 8 else today.year  # ESPN labels seasons by end year
     last_season_games = lambda: game_log(player_id, season=last_season)
@@ -96,8 +96,9 @@ def averages(player_id: str, window: str = "season", today: date | None = None) 
         if pool:
             totals = _sum(pool)
             return {"source": source, "games": len(pool),
-                    "per_game": {s: v / len(pool) for s, v in totals.items()}}
-    return {"source": None, "games": 0, "per_game": {s: 0.0 for s in STATS}}
+                    "per_game": {s: v / len(pool) for s, v in totals.items()},
+                    "pool": [g["stats"] for g in pool]}
+    return {"source": None, "games": 0, "per_game": {s: 0.0 for s in STATS}, "pool": []}
 
 
 def week_totals(player_id: str, monday: date, today: date | None = None) -> dict:
