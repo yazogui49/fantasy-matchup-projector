@@ -58,6 +58,19 @@ def remaining_games(today: date | None = None) -> dict[str, list[str]]:
     return dict(remaining)
 
 
+def week_games(day: date) -> dict[str, list[str]]:
+    """Team -> dates of all its games in the fantasy week containing `day`, played or not."""
+    monday, sunday = fantasy_week(day)
+    games: dict[str, list[str]] = defaultdict(list)
+    d = monday
+    while d <= sunday:
+        for g in games_on(d):
+            games[g["home"]].append(g["date"])
+            games[g["away"]].append(g["date"])
+        d += timedelta(days=1)
+    return dict(games)
+
+
 if __name__ == "__main__":
     import argparse
 

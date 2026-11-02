@@ -18,8 +18,10 @@ data stays on my own machine.
    are projected from makes and attempts, never averaged percentages.
 4. Category-by-category comparison; anything within 5% is a toss-up.
 5. Per-player games override for injuries/rest, and a next-week view.
+6. Vs league: where your roster ranks against a simulated 12-team league.
 
-Yahoo integration (real rosters, lineups and totals) is waiting on Yahoo Fantasy API approval.
+Yahoo integration (real rosters, lineups and totals) is waiting on Yahoo Fantasy API approval;
+everything set aside for it is listed in [YAHOO_TODO.md](YAHOO_TODO.md).
 
 ## Run it
 
@@ -38,5 +40,6 @@ Data comes from ESPN's public endpoints and is cached in `cache/`.
 - `projector/players.py`: player directory and name search
 - `projector/stats.py`: game logs, averages per window, week-to-date totals
 - `projector/projection.py`: projection, slot limits, category comparison (JSON result)
+- `projector/benchmark.py`: simulated league drafts and ranking (Vs league tab)
 - `projector/output.py`: text table; `app.py`: Streamlit UI
 - `projector/auth.py`: Yahoo OAuth (for when API access is approved)

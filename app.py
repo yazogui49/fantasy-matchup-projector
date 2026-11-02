@@ -10,6 +10,7 @@ import pandas as pd
 import requests
 import streamlit as st
 
+from projector.benchmark import benchmark
 from projector.config import ROOT
 from projector.league import PRESETS
 from projector.output import fmt
@@ -50,6 +51,13 @@ def run_projection(me: tuple[str, ...], opp: tuple[str, ...], preset: str, windo
         return [{**directory[i], "games_override": overrides.get(i)} for i in ids]
 
     return project_matchup(roster(me), roster(opp), PRESETS[preset], window=window, today=as_of)
+
+
+@st.cache_data(ttl=3600, show_spinner="Simulating a league…")
+def run_benchmark(me: tuple[str, ...], preset: str, week_start: str) -> dict:
+    directory = players_by_id()
+    return benchmark([directory[i] for i in me], directory, PRESETS[preset],
+                     date.fromisoformat(week_start))
 
 
 # Each person's state lives in the page URL (bookmarkable, shareable, per-browser), so
@@ -213,7 +221,8 @@ when = "nothing played yet, all games projected" if week == "next" else f"as of 
 st.caption(f"Week {result['week']['start']} to {result['week']['end']} · {when}"
            f" · using {WINDOW_LABELS[window].lower()} stats")
 
-tab_matchup, tab_days, tab_whatif, tab_players = st.tabs(["Matchup", "Days", "What if", "Players"])
+tab_matchup, tab_days, tab_whatif, tab_league, tab_players = st.tabs(
+    ["Matchup", "Days", "What if", "Vs league", "Players"])
 
 with tab_matchup:
     c1, c2, c3 = st.columns(3)
@@ -306,6 +315,36 @@ with tab_whatif:
         st.dataframe(styled_winner(pd.DataFrame(rows), [r["winner"] for r in alt["categories"]],
                                    "Projected winner"), hide_index=True, width="stretch")
         st.caption("Added players play all their team's remaining games unless they're Out.")
+
+with tab_league:
+    st.caption("Your team against a typical 12-team league instead of just your opponent: "
+               "50 simulated drafts of the best players, everyone's week projected the same way "
+               "(this season's averages × games this week, at most 10 a day). "
+               "Your real league comes in once Yahoo access is approved.")
+    bench_res = run_benchmark(tuple(me_ids), preset, week_start)
+    b1, b2, b3 = st.columns(3)
+    b1.metric(f"Rank of {bench_res['league_size']}", f"~{bench_res['rank']:g}",
+              f"range {bench_res['rank_best']}–{bench_res['rank_worst']}", delta_color="off")
+    b2.metric("Matchups you'd win", f"{bench_res['matchup_win_pct']:.0%}")
+    b3.metric("Categories vs a typical team", bench_res["expected_cats"])
+
+    def strength(beats: float) -> str:
+        return "Strong" if beats >= 0.7 else "Weak" if beats <= 0.3 else "Average"
+
+    levels = [strength(c["beats_pct"]) for c in bench_res["categories"]]
+    st.dataframe(pd.DataFrame([{
+        "Category": c["category"],
+        "You": fmt(c["me"], c["is_pct"]),
+        "Typical team": fmt(c["typical"], c["is_pct"]),
+        "Better than": f"{c['beats_pct']:.0%} of teams",
+        "": level,
+    } for c, level in zip(bench_res["categories"], levels)]).style.apply(
+        lambda col: [f"color: {WINNER_COLORS[{'Strong': 'me', 'Weak': 'opponent'}.get(v, 'toss-up')]};"
+                     " font-weight: 600" for v in col], subset=[""]),
+        hide_index=True, width="stretch")
+    st.caption(f"Games this week: you {bench_res['games']['me']}, typical team "
+               f"{bench_res['games']['typical']:g}. Out players count as 0; the Plays overrides "
+               "aren't applied here.")
 
 with tab_players:
     for side, title in (("me", "My team"), ("opponent", "Opponent")):
