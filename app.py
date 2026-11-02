@@ -225,8 +225,8 @@ with tab_matchup:
         left = remaining_starts(result, side)
         col.metric(title, total_starts(result, side),
                    None if week == "next" else f"{left} left", delta_color="off")
-    st.caption("Games = every player's games added up, but on days with more players playing "
-               "than starting slots, only the ones who fit a slot count.")
+    st.caption(f"Games = every player's games added up, but at most "
+               f"{len(settings.starting_slots)} count on any one day.")
 
     now = {r["category"]: r for r in result["current_categories"]}
     table = pd.DataFrame([{
@@ -247,16 +247,18 @@ with tab_matchup:
                "the player's real games in the chosen window. 40–60% counts as a toss-up.")
 
 with tab_days:
-    st.caption(f"Players with a game each day vs your {len(settings.starting_slots)} starting "
-               "slots. **Open** slots are where a pickup adds full games; on full days an extra "
-               "player just sits.")
+    n_slots = len(settings.starting_slots)
+    st.caption(f"**Playing** = players with a game that day. **Counted** = how many of them "
+               f"count (at most {n_slots}; extras sit, fewest minutes first). **Open** = unused "
+               "slots, where a pickup adds full games.")
     day_rows = []
     for mine, theirs in zip(result["teams"]["me"]["daily"], result["teams"]["opponent"]["daily"]):
         day_rows.append({
             "Day": date.fromisoformat(mine["date"]).strftime("%a %b %-d") + (" ✓" if mine["past"] else ""),
-            "My games": mine["with_games"], "My starts": mine["starting"], "My open": mine["open_slots"],
-            "Opp games": theirs["with_games"], "Opp starts": theirs["starting"],
-            "My benched": ", ".join(mine["benched"]),
+            "My playing": mine["with_games"], "My counted": mine["starting"],
+            "My open": mine["open_slots"],
+            "Opp playing": theirs["with_games"], "Opp counted": theirs["starting"],
+            "My sitting": ", ".join(mine["benched"]),
         })
     days_df = pd.DataFrame(day_rows)
     st.dataframe(days_df.style.apply(

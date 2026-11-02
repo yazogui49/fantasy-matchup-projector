@@ -14,7 +14,7 @@ data stays on my own machine.
 1. Pick both rosters (searchable list of every NBA player, from ESPN).
 2. Stats so far this week come from real box scores; the rest of the week is
    per-game average × games remaining (choose: this season, last 30 days, last season, ...).
-3. Daily starting-slot limits are applied (PG SG G G SF PF F F C C), and FG%/FT%
+3. At most 10 players count per day (positions ignored until Yahoo eligibility is in), and FG%/FT%
    are projected from makes and attempts, never averaged percentages.
 4. Category-by-category comparison; anything within 5% is a toss-up.
 5. Per-player games override for injuries/rest, and a next-week view.

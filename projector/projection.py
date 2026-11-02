@@ -12,12 +12,17 @@ from .stats import STATS, averages, game_log, played_by
 
 SIMULATIONS = 2000
 TOSS_UP = (0.40, 0.60)  # win chance inside this band = toss-up
+# ESPN positions don't match Yahoo eligibility (e.g. Yahoo adds SG to some forwards),
+# so until Yahoo data is in, only the number of slots limits each day's starters.
+USE_POSITIONS = False
 
 
 def _starters(candidates: list[dict], slots: list[str]) -> set[str]:
     """Ids of the candidates who get a starting slot. Candidates come in priority
     order; each is placed if any slot assignment fits them (bipartite matching),
     so a lower-priority player only starts when a higher one can't use the slot."""
+    if not USE_POSITIONS:
+        return {p["id"] for p in candidates[:len(slots)]}
     holder: dict[int, dict] = {}
 
     def place(player: dict, tried: set[int]) -> bool:
