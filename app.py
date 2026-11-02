@@ -200,8 +200,12 @@ def styled_winner(df: pd.DataFrame, winners: list[str], column: str):
         subset=[column])
 
 
-def remaining_starts(res: dict) -> int:
-    return sum(d["starting"] for d in res["teams"]["me"]["daily"] if not d["past"])
+def remaining_starts(res: dict, side: str = "me") -> int:
+    return sum(d["starting"] for d in res["teams"][side]["daily"] if not d["past"])
+
+
+def total_starts(res: dict, side: str = "me") -> int:
+    return sum(d["starting"] for d in res["teams"][side]["daily"])
 
 
 st.subheader(f"{summary['text']} · expected {summary['expected_wins']} categories")
@@ -216,6 +220,13 @@ with tab_matchup:
     c1.metric("Winning", summary["wins"])
     c2.metric("Losing", summary["losses"])
     c3.metric("Toss-ups", summary["toss_ups"])
+    g1, g2 = st.columns(2)
+    for col, side, title in ((g1, "me", "My games"), (g2, "opponent", "Opponent games")):
+        left = remaining_starts(result, side)
+        col.metric(title, total_starts(result, side),
+                   None if week == "next" else f"{left} left", delta_color="off")
+    st.caption("Games = every player's games added up, but on days with more players playing "
+               "than starting slots, only the ones who fit a slot count.")
 
     now = {r["category"]: r for r in result["current_categories"]}
     table = pd.DataFrame([{
@@ -251,10 +262,8 @@ with tab_days:
     st.dataframe(days_df.style.apply(
         lambda col: ["background-color: rgba(26,127,55,.15)" if v > 0 else "" for v in col],
         subset=["My open"]), hide_index=True, width="stretch")
-    totals = {side: sum(d["starting"] for d in result["teams"][side]["daily"])
-              for side in ("me", "opponent")}
-    st.caption(f"✓ = already played. Total starts this week: me {totals['me']}, "
-               f"opponent {totals['opponent']}.")
+    st.caption(f"✓ = already played. Total games this week: me {total_starts(result)}, "
+               f"opponent {total_starts(result, 'opponent')}.")
 
 with tab_whatif:
     st.caption("Try a roster move and see the matchup with it. Your real roster isn't changed.")
