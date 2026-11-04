@@ -26,11 +26,11 @@ _COLUMNS = {
     "avgAssists": "ast", "avgSteals": "stl", "avgBlocks": "blk", "avgTurnovers": "tov",
     "avgPoints": "pts",
 }
-LEAGUES = 50
+LEAGUES = 100
 TEAMS = 12
 DRAFT_NOISE = 0.5  # spread of each drafter's opinion, in units of value's std dev
 MIN_GAMES = 2      # ignore players with fewer games when building the draft pool
-POOL_FACTOR = 2    # recent windows: fetch game logs for this many x the drafted players
+POOL_FACTOR = 2    # draft pool: this many x the drafted players, best by this season
 
 
 def season_averages(season: int | None = None) -> dict[str, dict]:
@@ -101,20 +101,23 @@ def _h2h(a: np.ndarray, b: np.ndarray) -> np.ndarray:
 
 def _window_averages(window: str, roster: list[dict], directory: dict[str, dict],
                      settings: LeagueSettings, roster_size: int, today: date) -> dict[str, dict]:
-    """Per-player averages for `window`. Whole seasons come from one all-player request;
-    recent windows from game logs, for the players a draft could reach (ranked by this
-    season) plus the roster."""
+    """Per-player averages for `window`, for the players a draft could reach (the best
+    by this season) plus the roster. The pool is the same for every window, so switching
+    windows only changes the stats, not who's in the league. Whole seasons come from one
+    all-player request; recent windows from game logs."""
     this_season = season_averages()
-    if window == "season":
-        return this_season
-    if window == "lastseason":
-        last = season_averages(today.year - 1 if today.month < 8 else today.year)
-        return {**this_season, **last}  # rookies keep this season's numbers
     eligible = [pid for pid, a in this_season.items() if a["games"] >= MIN_GAMES
                 and pid in directory and directory[pid]["injury"] != "Out"]
     value = _values([this_season[pid] for pid in eligible], settings)
     reach = [eligible[i] for i in np.argsort(-value)[:TEAMS * roster_size * POOL_FACTOR]]
     ids = list(dict.fromkeys(reach + [p["id"] for p in roster]))
+    if window == "season":
+        return {pid: this_season[pid] for pid in ids if pid in this_season}
+    if window == "lastseason":
+        last = season_averages(today.year - 1 if today.month < 8 else today.year)
+        # Rookies keep this season's numbers.
+        return {pid: last.get(pid) or this_season[pid] for pid in ids
+                if pid in last or pid in this_season}
     with ThreadPoolExecutor(8) as ex:
         results = ex.map(lambda pid: averages(pid, window, today), ids)
     return {pid: {"games": r["games"], "per_game": r["per_game"]} for pid, r in zip(ids, results)}
