@@ -2,18 +2,19 @@
 
 Until Yahoo gives us the real league, simulate one: rank players by 9-cat value,
 snake-draft them into 12 teams (with some noise, since real drafts aren't by the
-book), and compare everyone's full week on the same footing: this season's
-per-game averages x games that week, at most `slots` players counted per day."""
+book), and compare everyone's full week on the same footing: per-game averages from
+the chosen window x games that week, at most `slots` players counted per day."""
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 
 import numpy as np
 
 from .cache import get_json
 from .league import LeagueSettings
-from .schedule import week_games
-from .stats import STATS
+from .schedule import nba_today, week_games
+from .stats import STATS, averages
 
 SEASON_STATS = ("https://site.web.api.espn.com/apis/common/v3/sports/basketball/nba/"
                 "statistics/byathlete?region=us&lang=en&contentorigin=espn&isqualified=false&limit=1000")
@@ -29,11 +30,14 @@ LEAGUES = 50
 TEAMS = 12
 DRAFT_NOISE = 0.5  # spread of each drafter's opinion, in units of value's std dev
 MIN_GAMES = 2      # ignore players with fewer games when building the draft pool
+POOL_FACTOR = 2    # recent windows: fetch game logs for this many x the drafted players
 
 
-def season_averages() -> dict[str, dict]:
-    """Player id -> {'games': n, 'per_game': {stat: avg}} for everyone who's played."""
-    data = get_json(SEASON_STATS, ttl=3 * 3600)
+def season_averages(season: int | None = None) -> dict[str, dict]:
+    """Player id -> {'games': n, 'per_game': {stat: avg}} for everyone who's played.
+    `season` = end year of a past regular season (2026 = 2025-26); None = this season."""
+    url = SEASON_STATS + (f"&season={season}&seasontype=2" if season else "")
+    data = get_json(url, ttl=None if season else 3 * 3600)
     names = {c["name"]: c["names"] for c in data["categories"]}
     out = {}
     for a in data["athletes"]:
@@ -95,22 +99,44 @@ def _h2h(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     return np.where(wins > losses, 1.0, np.where(wins == losses, 0.5, 0.0))
 
 
+def _window_averages(window: str, roster: list[dict], directory: dict[str, dict],
+                     settings: LeagueSettings, roster_size: int, today: date) -> dict[str, dict]:
+    """Per-player averages for `window`. Whole seasons come from one all-player request;
+    recent windows from game logs, for the players a draft could reach (ranked by this
+    season) plus the roster."""
+    this_season = season_averages()
+    if window == "season":
+        return this_season
+    if window == "lastseason":
+        last = season_averages(today.year - 1 if today.month < 8 else today.year)
+        return {**this_season, **last}  # rookies keep this season's numbers
+    eligible = [pid for pid, a in this_season.items() if a["games"] >= MIN_GAMES
+                and pid in directory and directory[pid]["injury"] != "Out"]
+    value = _values([this_season[pid] for pid in eligible], settings)
+    reach = [eligible[i] for i in np.argsort(-value)[:TEAMS * roster_size * POOL_FACTOR]]
+    ids = list(dict.fromkeys(reach + [p["id"] for p in roster]))
+    with ThreadPoolExecutor(8) as ex:
+        results = ex.map(lambda pid: averages(pid, window, today), ids)
+    return {pid: {"games": r["games"], "per_game": r["per_game"]} for pid, r in zip(ids, results)}
+
+
 def benchmark(roster: list[dict], directory: dict[str, dict], settings: LeagueSettings,
-              day: date, seed: int = 0) -> dict:
+              day: date, window: str = "season", seed: int = 0) -> dict:
     """Compare `roster` (player dicts with id/team/injury) with simulated league teams
     for the fantasy week containing `day`. JSON-serializable result."""
-    averages = season_averages()
     schedule = week_games(day)
     slots = len(settings.starting_slots)
     roster_size = slots + settings.bench
+    stats_day = nba_today()  # averages use every game played so far, whichever week
+    avgs = _window_averages(window, roster, directory, settings, roster_size, stats_day)
 
     def player(pid: str) -> dict:
         info = directory.get(pid, {})
         return {"id": pid, "team": info.get("team"),
-                "per_game": averages.get(pid, {}).get("per_game", {})}
+                "per_game": avgs.get(pid, {}).get("per_game", {})}
 
     # Draft pool: current players who've played, minus anyone Out (they'd sit on IL).
-    pool = [player(pid) for pid, a in averages.items()
+    pool = [player(pid) for pid, a in avgs.items()
             if a["games"] >= MIN_GAMES and pid in directory and directory[pid]["injury"] != "Out"]
     value = _values(pool, settings)
 

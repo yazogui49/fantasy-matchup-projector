@@ -64,10 +64,11 @@ def run_projection(me: tuple[str, ...], opp: tuple[str, ...], preset: str, windo
 
 
 @st.cache_data(ttl=3600, show_spinner="Simulating a league…")
-def run_benchmark(me: tuple[str, ...], preset: str, week_start: str, code: str) -> dict:
+def run_benchmark(me: tuple[str, ...], preset: str, week_start: str, window: str,
+                  code: str) -> dict:
     directory = players_by_id()
     return benchmark([directory[i] for i in me], directory, PRESETS[preset],
-                     date.fromisoformat(week_start))
+                     date.fromisoformat(week_start), window)
 
 
 # Each person's state lives in the page URL (bookmarkable, shareable, per-browser), so
@@ -397,9 +398,9 @@ with tab_whatif:
 with tab_league:
     st.caption("Your team against a typical 12-team league instead of just your opponent: "
                "50 simulated drafts of the best players, everyone's week projected the same way "
-               "(this season's averages × games this week, at most 10 a day). "
+               f"({WINDOW_LABELS[window].lower()} averages × games this week, at most 10 a day). "
                "Your real league comes in once Yahoo access is approved.")
-    bench_res = run_benchmark(tuple(me_ids), preset, week_start, CODE_VERSION)
+    bench_res = run_benchmark(tuple(me_ids), preset, week_start, window, CODE_VERSION)
     b1, b2, b3 = st.columns(3)
     b1.metric(f"Rank of {bench_res['league_size']}", f"~{bench_res['rank']:g}",
               f"range {bench_res['rank_best']}–{bench_res['rank_worst']}", delta_color="off")
