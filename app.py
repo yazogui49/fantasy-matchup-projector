@@ -322,7 +322,7 @@ with tab_days:
         days_df = pd.DataFrame([{
             "Day": date.fromisoformat(d["date"]).strftime("%a %b %-d") + (" ✓" if d["past"] else ""),
             "Had a game": d["scheduled"], "Playing": d["with_games"], "Counted": d["starting"],
-            "Open": d["open_slots"], "Sitting": ", ".join(d["benched"]),
+            "Open": d["open_slots"], "Sitting": ", ".join(d["sitting"]),
         } for d in daily])
         st.dataframe(days_df.style.apply(
             lambda col: ["background-color: rgba(26,127,55,.15)" if v > 0 else "" for v in col],

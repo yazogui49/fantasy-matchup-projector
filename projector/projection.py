@@ -98,6 +98,11 @@ def _project_team(roster: list[dict], settings: LeagueSettings, window: str,
             # Players whose team had/has a game, including ones who sat out injured.
             "scheduled_ids": [p["id"] for p in priority if d in (schedule or {}).get(p["team"], [])],
             "user_set": d in sat,
+            # Everyone sitting: the user's bench (even players who didn't play), plus anyone
+            # who played but didn't fit in the slots.
+            "sitting": [p["name"] for p in priority
+                        if (p["id"] in benched and d in (schedule or {}).get(p["team"], []))
+                        or (p in playing and p["id"] not in starting)],
             "starting": len(starting),
             "benched": [p["name"] for p in playing if p["id"] not in starting],
             "playing_ids": [p["id"] for p in playing],
