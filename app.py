@@ -145,12 +145,14 @@ settings = PRESETS[preset]
 roster_size = len(settings.starting_slots) + settings.bench + settings.il
 
 left, right = st.columns(2)
-with left:
-    st.multiselect("My team", list(directory), key="me", format_func=label,
-                   max_selections=roster_size, placeholder="Type a name…")
-with right:
-    st.multiselect("Opponent", list(directory), key="opponent", format_func=label,
-                   max_selections=roster_size, placeholder="Type a name…")
+for col, key, title in ((left, "me", "My team"), (right, "opponent", "Opponent")):
+    with col:
+        st.multiselect(title, list(directory), key=key, format_func=label,
+                       max_selections=roster_size, placeholder="Type a name…")
+        # The chips get cut off when the box is narrow (phones), so list everyone here too.
+        if st.session_state[key]:
+            with st.expander(f"Show all {len(st.session_state[key])} players"):
+                st.markdown("\n".join(f"- {label(pid)}" for pid in st.session_state[key]))
 
 me_ids, opp_ids = st.session_state["me"], st.session_state["opponent"]
 if not me_ids or not opp_ids:
