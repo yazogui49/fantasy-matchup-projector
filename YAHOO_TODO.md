@@ -12,8 +12,7 @@ Things set aside until Yahoo approves the app (applied 2026-10-30). Check access
    so daily starters follow PG SG G G SF PF F F C C.
 4. **Who actually started each day**: past days currently assume the fewest-minutes
    players sat when more than 10 played; users can set the bench for any day by hand
-   in the Days tab. Yahoo has
-   the real daily lineups, so the manual fix can go.
+   in the Days tab. Yahoo has the real daily lineups, so the manual fix can go.
 5. **Official matchup totals so far**: use Yahoo's live category totals instead of
    rebuilding them from ESPN box scores.
 6. **Yahoo's 7-day projections**: add as a "Project using" option (if the API exposes them).
