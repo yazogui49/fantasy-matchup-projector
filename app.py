@@ -303,53 +303,47 @@ with tab_matchup:
 
 with tab_days:
     n_slots = len(settings.starting_slots)
-    st.caption(f"**Playing** = players with a game that day. **Counted** = how many of them "
-               f"count (at most {n_slots}; extras sit, fewest minutes first). **Open** = unused "
-               "slots, where a pickup adds full games.")
-    day_rows = []
-    for mine, theirs in zip(result["teams"]["me"]["daily"], result["teams"]["opponent"]["daily"]):
-        day_rows.append({
-            "Day": date.fromisoformat(mine["date"]).strftime("%a %b %-d") + (" ✓" if mine["past"] else ""),
-            "My playing": mine["with_games"], "My counted": mine["starting"],
-            "My open": mine["open_slots"],
-            "Opp playing": theirs["with_games"], "Opp counted": theirs["starting"],
-            "My sitting": ", ".join(mine["benched"]),
-        })
-    days_df = pd.DataFrame(day_rows)
-    st.dataframe(days_df.style.apply(
-        lambda col: ["background-color: rgba(26,127,55,.15)" if v > 0 else "" for v in col],
-        subset=["My open"]), hide_index=True, width="stretch")
-    st.caption(f"✓ = already played. Total games this week: me {total_starts(result)}, "
-               f"opponent {total_starts(result, 'opponent')}.")
+    st.caption(f"**Had a game** = his team played. **Playing** = actually played (past days) or "
+               f"expected to (Out players and Plays overrides excluded). **Counted** = at most "
+               f"{n_slots} a day; the rest sit. **Open** = unused slots, where a pickup adds games.")
 
-    # Past days with more players than slots: show the guess of who sat, and let it be fixed.
-    crowded = [(side, d) for side in ("me", "opponent")
-               for d in result["teams"][side]["daily"] if d["past"] and d["benched_ids"]]
-    if crowded:
-        with st.expander("Who sat on past days? (fix the guess)"):
-            st.caption("On these days more players played than there are slots, so some sat "
-                       "and their stats don't count. The app guesses the ones with the fewest "
-                       "minutes; change it to match who actually sat in Yahoo.")
+    def remember_sat(side: str, day: str, key: str) -> None:
+        st.session_state["sat"].setdefault(side, {})[day] = st.session_state[key]
 
-            def remember_sat(side: str, day: str, key: str) -> None:
-                st.session_state["sat"].setdefault(side, {})[day] = st.session_state[key]
+    for side, title in (("me", "My team"), ("opponent", "Opponent")):
+        daily = result["teams"][side]["daily"]
+        st.markdown(f"**{title}** · {total_starts(result, side)} games counted this week")
+        days_df = pd.DataFrame([{
+            "Day": date.fromisoformat(d["date"]).strftime("%a %b %-d") + (" ✓" if d["past"] else ""),
+            "Had a game": d["scheduled"], "Playing": d["with_games"], "Counted": d["starting"],
+            "Open": d["open_slots"], "Sitting": ", ".join(d["benched"]),
+        } for d in daily])
+        st.dataframe(days_df.style.apply(
+            lambda col: ["background-color: rgba(26,127,55,.15)" if v > 0 else "" for v in col],
+            subset=["Open"]), hide_index=True, width="stretch")
 
-            for side, d in crowded:
-                key = f"sat_{side}_{d['date']}"
-                picked = [i for i in st.session_state["sat"].get(side, {}).get(d["date"], [])
-                          if i in d["playing_ids"]]
-                st.session_state[key] = picked or d["benched_ids"]
-                who = "Me" if side == "me" else "Opponent"
-                st.multiselect(
-                    f"{who} · {date.fromisoformat(d['date']).strftime('%a %b %-d')}: "
-                    f"{d['with_games']} played, {len(d['benched_ids'])} sat",
-                    d["playing_ids"], key=key, format_func=lambda i: directory[i]["name"],
-                    max_selections=len(d["benched_ids"]),
-                    on_change=remember_sat, args=(side, d["date"], key))
-            if any(st.session_state["sat"].values()):
-                if st.button("Back to the app's guesses"):
-                    st.session_state["sat"] = {}
-                    st.rerun()
+        # Days with more players than slots: the app guesses who sits (fewest minutes);
+        # let it be changed to match the real lineup.
+        crowded = [d for d in daily if d["benched_ids"]]
+        if crowded:
+            with st.expander(f"Change who sits ({title.lower()})"):
+                for d in crowded:
+                    key = f"sat_{side}_{d['date']}"
+                    picked = [i for i in st.session_state["sat"].get(side, {}).get(d["date"], [])
+                              if i in d["playing_ids"]]
+                    st.session_state[key] = picked or d["benched_ids"]
+                    verb = ("played", "sat") if d["past"] else ("playing", "sit")
+                    st.multiselect(
+                        f"{date.fromisoformat(d['date']).strftime('%a %b %-d')}: "
+                        f"{d['with_games']} {verb[0]}, {len(d['benched_ids'])} {verb[1]}",
+                        d["playing_ids"], key=key, format_func=lambda i: directory[i]["name"],
+                        max_selections=len(d["benched_ids"]),
+                        on_change=remember_sat, args=(side, d["date"], key))
+    st.caption("✓ = already played.")
+    if any(st.session_state["sat"].values()):
+        if st.button("Back to the app's guesses of who sits"):
+            st.session_state["sat"] = {}
+            st.rerun()
 
 with tab_whatif:
     st.caption("Try a roster move and see the matchup with it. Your real roster isn't changed.")

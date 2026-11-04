@@ -7,7 +7,7 @@ from datetime import date, datetime, timedelta, timezone
 import numpy as np
 
 from .league import SLOT_ELIGIBILITY, LeagueSettings
-from .schedule import fantasy_week, nba_today, remaining_games
+from .schedule import fantasy_week, nba_today, remaining_games, week_games
 from .stats import STATS, averages, game_log, played_by
 
 SIMULATIONS = 2000
@@ -42,7 +42,8 @@ def _starters(candidates: list[dict], slots: list[str]) -> set[str]:
 
 def _project_team(roster: list[dict], settings: LeagueSettings, window: str,
                   today: date, monday: date, sunday: date,
-                  remaining: dict[str, list[str]], sat: dict[str, list[str]] | None = None) -> dict:
+                  remaining: dict[str, list[str]], sat: dict[str, list[str]] | None = None,
+                  schedule: dict[str, list[str]] | None = None) -> dict:
     """`sat`: date -> ids known to have sat that day (past days with more players than
     slots); they only start if there's still room. Other days, fewest minutes sit."""
     sat = sat or {}
@@ -94,6 +95,8 @@ def _project_team(roster: list[dict], settings: LeagueSettings, window: str,
             "date": d,
             "past": d < today.isoformat(),
             "with_games": len(playing),
+            # Players whose team had/has a game, including ones who sat out injured.
+            "scheduled": sum(d in (schedule or {}).get(p["team"], []) for p in players),
             "starting": len(starting),
             "benched": [p["name"] for p in playing if p["id"] not in starting],
             "playing_ids": [p["id"] for p in playing],
@@ -173,9 +176,10 @@ def project_matchup(me: list[dict], opponent: list[dict], settings: LeagueSettin
     today = today or nba_today()
     monday, sunday = fantasy_week(today)
     remaining = remaining_games(today)
+    schedule = week_games(today)
     sat = sat or {}
     teams = {side: _project_team(roster, settings, window, today, monday, sunday, remaining,
-                                 sat.get(side))
+                                 sat.get(side), schedule)
              for side, roster in (("me", me), ("opponent", opponent))}
     rng = np.random.default_rng(0)  # fixed seed: same inputs give the same chances
     sims = (simulate(teams["me"], rng), simulate(teams["opponent"], rng))
