@@ -95,7 +95,7 @@ SIDE_CODES = {"me": "m", "opponent": "o"}
 
 def encode_sat(sat: dict[str, dict[str, list[str]]]) -> str:
     return "_".join(f"{SIDE_CODES[side]}~{day}~{'.'.join(ids)}"
-                    for side, days in sorted(sat.items()) for day, ids in sorted(days.items()) if ids)
+                    for side, days in sorted(sat.items()) for day, ids in sorted(days.items()))
 
 
 def decode_sat(text: str) -> dict[str, dict[str, list[str]]]:
@@ -104,7 +104,7 @@ def decode_sat(text: str) -> dict[str, dict[str, list[str]]]:
     for chunk in filter(None, text.split("_")):
         parts = chunk.split("~")
         if len(parts) == 3 and parts[0] in sides:
-            sat.setdefault(sides[parts[0]], {})[parts[1]] = parts[2].split(".")
+            sat.setdefault(sides[parts[0]], {})[parts[1]] = [i for i in parts[2].split(".") if i]
     return sat
 
 
@@ -237,7 +237,7 @@ save({"me": me_ids, "opponent": opp_ids, "window": window, "games": st.session_s
 
 games_key = tuple(sorted(week_games.items()))
 sat_key = tuple((side, d, tuple(ids)) for side, days in sorted(st.session_state["sat"].items())
-                for d, ids in sorted(days.items()) if ids)
+                for d, ids in sorted(days.items()))
 result = run_projection(tuple(me_ids), tuple(opp_ids), preset, window, as_of, games_key, sat_key,
                         CODE_VERSION)
 summary = result["summary"]
@@ -310,7 +310,8 @@ with tab_days:
     n_slots = len(settings.starting_slots)
     st.caption(f"**Had a game** = his team played. **Playing** = actually played (past days) or "
                f"expected to (Out players and Plays overrides excluded). **Counted** = at most "
-               f"{n_slots} a day; the rest sit. **Open** = unused slots, where a pickup adds games.")
+               f"{n_slots} a day; the rest sit (pick who sits under each table). **Open** = unused "
+               "slots, where a pickup adds games.")
 
     def remember_sat(side: str, day: str, key: str) -> None:
         st.session_state["sat"].setdefault(side, {})[day] = st.session_state[key]
@@ -327,25 +328,27 @@ with tab_days:
             lambda col: ["background-color: rgba(26,127,55,.15)" if v > 0 else "" for v in col],
             subset=["Open"]), hide_index=True, width="stretch")
 
-        # Days with more players than slots: the app guesses who sits (fewest minutes);
-        # let it be changed to match the real lineup.
-        crowded = [d for d in daily if d["benched_ids"]]
-        if crowded:
-            with st.expander(f"Change who sits ({title.lower()})"):
-                for d in crowded:
+        # Who sits, any day: the app's guess (fewest minutes, only when more than 10
+        # play) until the user sets the day, then exactly what they picked.
+        game_days = [d for d in daily if d["scheduled"]]
+        if game_days:
+            with st.expander(f"Choose who sits each day ({title.lower()})"):
+                st.caption("Benched players' stats don't count, even if they played. Days you "
+                           "haven't touched use the app's guess.")
+                for d in game_days:
                     key = f"sat_{side}_{d['date']}"
-                    picked = [i for i in st.session_state["sat"].get(side, {}).get(d["date"], [])
-                              if i in d["playing_ids"]]
-                    st.session_state[key] = picked or d["benched_ids"]
-                    verb = ("played", "sat") if d["past"] else ("playing", "sit")
+                    chosen = st.session_state["sat"].get(side, {}).get(d["date"])
+                    st.session_state[key] = ([i for i in chosen if i in d["scheduled_ids"]]
+                                             if chosen is not None else d["benched_ids"])
                     st.multiselect(
-                        f"{date.fromisoformat(d['date']).strftime('%a %b %-d')}: "
-                        f"{d['with_games']} {verb[0]}, {len(d['benched_ids'])} {verb[1]}",
-                        d["playing_ids"], key=key, format_func=lambda i: directory[i]["name"],
-                        max_selections=len(d["benched_ids"]),
+                        f"{date.fromisoformat(d['date']).strftime('%a %b %-d')} · "
+                        f"{d['scheduled']} had a game · "
+                        + ("set by you" if d["user_set"] else "app's guess"),
+                        d["scheduled_ids"], key=key, format_func=lambda i: directory[i]["name"],
+                        placeholder="Nobody sits",
                         on_change=remember_sat, args=(side, d["date"], key))
     st.caption("✓ = already played.")
-    if any(st.session_state["sat"].values()):
+    if any(st.session_state["sat"].values()):  # any day set by the user
         if st.button("Back to the app's guesses of who sits"):
             st.session_state["sat"] = {}
             st.rerun()

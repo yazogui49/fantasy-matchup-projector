@@ -44,8 +44,9 @@ def _project_team(roster: list[dict], settings: LeagueSettings, window: str,
                   today: date, monday: date, sunday: date,
                   remaining: dict[str, list[str]], sat: dict[str, list[str]] | None = None,
                   schedule: dict[str, list[str]] | None = None) -> dict:
-    """`sat`: date -> ids known to have sat that day (past days with more players than
-    slots); they only start if there's still room. Other days, fewest minutes sit."""
+    """`sat`: date -> the exact ids benched that day, as set by the user; benched
+    players never count. Days not in `sat`: if more play than there are slots, the
+    ones with the fewest minutes sit."""
     sat = sat or {}
     # A future `today` (projecting next week) still averages the games played up to now.
     stats_date = min(today, nba_today())
@@ -76,10 +77,8 @@ def _project_team(roster: list[dict], settings: LeagueSettings, window: str,
     while day <= sunday:
         d = day.isoformat()
         playing = [p for p in priority if d in p["played"] or d in p["upcoming"]]
-        benched_first = set(sat.get(d, []))
-        starting = _starters([p for p in playing if p["id"] not in benched_first]
-                             + [p for p in playing if p["id"] in benched_first],
-                             settings.starting_slots)
+        benched = set(sat.get(d, []))
+        starting = _starters([p for p in playing if p["id"] not in benched], settings.starting_slots)
         for p in playing:
             if p["id"] not in starting:
                 p["games_benched"] += 1
@@ -95,8 +94,10 @@ def _project_team(roster: list[dict], settings: LeagueSettings, window: str,
             "date": d,
             "past": d < today.isoformat(),
             "with_games": len(playing),
-            # Players whose team had/has a game, including ones who sat out injured.
             "scheduled": sum(d in (schedule or {}).get(p["team"], []) for p in players),
+            # Players whose team had/has a game, including ones who sat out injured.
+            "scheduled_ids": [p["id"] for p in priority if d in (schedule or {}).get(p["team"], [])],
+            "user_set": d in sat,
             "starting": len(starting),
             "benched": [p["name"] for p in playing if p["id"] not in starting],
             "playing_ids": [p["id"] for p in playing],
