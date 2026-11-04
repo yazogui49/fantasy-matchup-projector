@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -69,6 +70,30 @@ def week_games(day: date) -> dict[str, list[str]]:
             games[g["away"]].append(g["date"])
         d += timedelta(days=1)
     return dict(games)
+
+
+TEAMS = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams"
+TEAM_SCHEDULE = ("https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/{}/schedule"
+                 "?seasontype=2")
+
+
+def season_games(today: date | None = None) -> dict[str, list[str]]:
+    """Team -> dates of its unfinished regular-season games from today to season's end."""
+    real_today = nba_today()
+    today = today or real_today
+    teams = [t["team"] for t in get_json(TEAMS, ttl=86400)["sports"][0]["leagues"][0]["teams"]]
+    with ThreadPoolExecutor(8) as ex:
+        schedules = list(ex.map(lambda t: get_json(TEAM_SCHEDULE.format(t["id"]), ttl=86400), teams))
+    games: dict[str, list[str]] = {}
+    for team, schedule in zip(teams, schedules):
+        dates = []
+        for event in schedule["events"]:
+            day = datetime.fromisoformat(event["date"].replace("Z", "+00:00")).astimezone(NBA_TZ).date()
+            state = event["competitions"][0]["status"]["type"]["state"]
+            if day > today or (day == today and (day != real_today or state != "post")):
+                dates.append(day.isoformat())
+        games[team["abbreviation"]] = sorted(dates)
+    return games
 
 
 if __name__ == "__main__":

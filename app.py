@@ -63,12 +63,15 @@ def run_projection(me: tuple[str, ...], opp: tuple[str, ...], preset: str, windo
                            today=as_of, sat=sat_by_side)
 
 
+HORIZONS = {"season": "Rest of season", "week": "This week"}
+
+
 @st.cache_data(ttl=3600, show_spinner="Simulating a league…")
 def run_benchmark(me: tuple[str, ...], preset: str, week_start: str, window: str,
-                  code: str) -> dict:
+                  horizon: str, code: str) -> dict:
     directory = players_by_id()
     return benchmark([directory[i] for i in me], directory, PRESETS[preset],
-                     date.fromisoformat(week_start), window)
+                     date.fromisoformat(week_start), window, horizon)
 
 
 # Each person's state lives in the page URL (bookmarkable, shareable, per-browser), so
@@ -355,21 +358,24 @@ with tab_days:
             st.rerun()
 
 with tab_whatif:
-    st.caption("Try a roster move and see the matchup with it. Your real roster isn't changed.")
-    on_rosters = set(me_ids) | set(opp_ids)
+    st.caption("Try a pickup or a trade and see this week's matchup and your rest-of-season "
+               "standing with it. Your real roster isn't changed.")
     w1, w2 = st.columns(2)
     with w1:
-        drops = st.multiselect("Drop", me_ids, format_func=label, key="wi_drop")
+        drops = st.multiselect("Give / drop", me_ids, format_func=label, key="wi_drop")
     with w2:
-        adds = st.multiselect("Add", [i for i in directory if i not in on_rosters],
+        adds = st.multiselect("Get / add", [i for i in directory if i not in me_ids],
                               format_func=label, key="wi_add", placeholder="Type a name…")
     if not drops and not adds:
-        st.info("Pick a player to add and/or one to drop.")
+        st.info("Pick players to get and/or give. For a trade, pick both sides.")
     else:
         new_me = [i for i in me_ids if i not in drops] + adds
         if len(new_me) > roster_size:
             st.warning(f"That's {len(new_me)} players, over your {roster_size}-man roster.")
-        alt = run_projection(tuple(new_me), tuple(opp_ids), preset, window, as_of, games_key,
+        # Getting players from this week's opponent = a trade with them: they get mine.
+        from_opp = [i for i in adds if i in opp_ids]
+        new_opp = ([i for i in opp_ids if i not in from_opp] + list(drops)) if from_opp else opp_ids
+        alt = run_projection(tuple(new_me), tuple(new_opp), preset, window, as_of, games_key,
                              sat_key, CODE_VERSION)
         a_sum = alt["summary"]
         m1, m2, m3 = st.columns(3)
@@ -393,14 +399,41 @@ with tab_whatif:
             })
         st.dataframe(styled_winner(pd.DataFrame(rows), [r["winner"] for r in alt["categories"]],
                                    "Projected winner"), hide_index=True, width="stretch")
-        st.caption("Added players play all their team's remaining games unless they're Out.")
+        st.caption("Added players play all their team's remaining games unless they're Out."
+                   + (" Trade with your opponent: they get the players you give."
+                      if from_opp else ""))
+
+        st.markdown("**Against a typical league**")
+        horizon = st.radio("Over", list(HORIZONS), format_func=HORIZONS.get, horizontal=True,
+                           key="wi_horizon")
+        b_now = run_benchmark(tuple(me_ids), preset, week_start, window, horizon, CODE_VERSION)
+        b_alt = run_benchmark(tuple(new_me), preset, week_start, window, horizon, CODE_VERSION)
+        l1, l2, l3 = st.columns(3)
+        l1.metric(f"Rank of {b_alt['league_size']}", f"~{b_alt['rank']:g}",
+                  f"was ~{b_now['rank']:g}", delta_color="off")
+        l2.metric("Matchups you'd win", f"{b_alt['matchup_win_pct']:.0%}",
+                  f"{(b_alt['matchup_win_pct'] - b_now['matchup_win_pct']) * 100:+.0f} pts")
+        l3.metric("Categories vs a typical team", b_alt["expected_cats"],
+                  round(b_alt["expected_cats"] - b_now["expected_cats"], 1))
+        st.dataframe(pd.DataFrame([{
+            "Category": a["category"],
+            "Now": fmt(n["me"], n["is_pct"]),
+            "With move": fmt(a["me"], a["is_pct"]),
+            "Better than (teams)": f"{n['beats_pct']:.0%} → {a['beats_pct']:.0%}",
+            "Change": f"{(a['beats_pct'] - n['beats_pct']) * 100:+.0f} pts",
+        } for n, a in zip(b_now["categories"], b_alt["categories"])]),
+            hide_index=True, width="stretch")
 
 with tab_league:
+    league_horizon = st.radio("Over", list(HORIZONS), format_func=HORIZONS.get, horizontal=True,
+                              key="league_horizon")
+    span = "this week" if league_horizon == "week" else "the rest of the season"
     st.caption("Your team against a typical 12-team league instead of just your opponent: "
-               "50 simulated drafts of the best players, everyone's week projected the same way "
-               f"({WINDOW_LABELS[window].lower()} averages × games this week, at most 10 a day). "
+               "50 simulated drafts of the best players, every team projected the same way "
+               f"({WINDOW_LABELS[window].lower()} averages × games {span}, at most 10 a day). "
                "Your real league comes in once Yahoo access is approved.")
-    bench_res = run_benchmark(tuple(me_ids), preset, week_start, window, CODE_VERSION)
+    bench_res = run_benchmark(tuple(me_ids), preset, week_start, window, league_horizon,
+                              CODE_VERSION)
     b1, b2, b3 = st.columns(3)
     b1.metric(f"Rank of {bench_res['league_size']}", f"~{bench_res['rank']:g}",
               f"range {bench_res['rank_best']}–{bench_res['rank_worst']}", delta_color="off")
@@ -421,7 +454,7 @@ with tab_league:
         lambda col: [f"color: {WINNER_COLORS[{'Strong': 'me', 'Weak': 'opponent'}.get(v, 'toss-up')]};"
                      " font-weight: 600" for v in col], subset=[""]),
         hide_index=True, width="stretch")
-    st.caption(f"Games this week: you {bench_res['games']['me']}, typical team "
+    st.caption(f"Games {span}: you {bench_res['games']['me']}, typical team "
                f"{bench_res['games']['typical']:g}. Out players count as 0; the Plays overrides "
                "aren't applied here.")
 

@@ -18,7 +18,8 @@ data stays on my own machine.
    are projected from makes and attempts, never averaged percentages.
 4. Category-by-category comparison; anything within 5% is a toss-up.
 5. Per-player games override for injuries/rest, and a next-week view.
-6. Vs league: where your roster ranks against a simulated 12-team league.
+6. Vs league: where your roster ranks against a simulated 12-team league, this week or
+   over the rest of the season; What if shows the same for trades and pickups.
 
 Yahoo integration (real rosters, lineups and totals) is waiting on Yahoo Fantasy API approval;
 everything set aside for it is listed in [YAHOO_TODO.md](YAHOO_TODO.md).

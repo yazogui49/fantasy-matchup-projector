@@ -13,7 +13,7 @@ import numpy as np
 
 from .cache import get_json
 from .league import LeagueSettings
-from .schedule import nba_today, week_games
+from .schedule import nba_today, season_games, week_games
 from .stats import STATS, averages
 
 SEASON_STATS = ("https://site.web.api.espn.com/apis/common/v3/sports/basketball/nba/"
@@ -121,10 +121,11 @@ def _window_averages(window: str, roster: list[dict], directory: dict[str, dict]
 
 
 def benchmark(roster: list[dict], directory: dict[str, dict], settings: LeagueSettings,
-              day: date, window: str = "season", seed: int = 0) -> dict:
-    """Compare `roster` (player dicts with id/team/injury) with simulated league teams
-    for the fantasy week containing `day`. JSON-serializable result."""
-    schedule = week_games(day)
+              day: date, window: str = "season", horizon: str = "week", seed: int = 0) -> dict:
+    """Compare `roster` (player dicts with id/team/injury) with simulated league teams,
+    over the fantasy week containing `day` (horizon "week") or every remaining game
+    of the regular season ("season"). JSON-serializable result."""
+    schedule = week_games(day) if horizon == "week" else season_games()
     slots = len(settings.starting_slots)
     roster_size = slots + settings.bench
     stats_day = nba_today()  # averages use every game played so far, whichever week
