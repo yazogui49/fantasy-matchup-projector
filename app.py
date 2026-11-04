@@ -28,6 +28,11 @@ WINDOW_LABELS = {
 }
 WINNER_COLORS = {"me": "#1a7f37", "opponent": "#cf222e", "toss-up": "#9a6700"}
 
+# Cached results are keyed on this too: st.cache_data only notices edits to the cached
+# function itself, so after a deploy that changes projector/ it would serve old results.
+CODE_VERSION = hashlib.md5(b"".join(
+    f.read_bytes() for f in sorted((ROOT / "projector").glob("*.py")))).hexdigest()
+
 st.set_page_config(page_title="Matchup Projector", page_icon="🏀", layout="wide")
 
 
@@ -44,7 +49,7 @@ def team_games_left(as_of: date | None) -> dict[str, int]:
 @st.cache_data(ttl=1800, show_spinner="Crunching the matchup…")
 def run_projection(me: tuple[str, ...], opp: tuple[str, ...], preset: str, window: str,
                    as_of: date | None, games: tuple[tuple[str, int], ...],
-                   sat: tuple[tuple[str, str, tuple[str, ...]], ...] = ()) -> dict:
+                   sat: tuple[tuple[str, str, tuple[str, ...]], ...], code: str) -> dict:
     directory = players_by_id()
     overrides = dict(games)
 
@@ -59,7 +64,7 @@ def run_projection(me: tuple[str, ...], opp: tuple[str, ...], preset: str, windo
 
 
 @st.cache_data(ttl=3600, show_spinner="Simulating a league…")
-def run_benchmark(me: tuple[str, ...], preset: str, week_start: str) -> dict:
+def run_benchmark(me: tuple[str, ...], preset: str, week_start: str, code: str) -> dict:
     directory = players_by_id()
     return benchmark([directory[i] for i in me], directory, PRESETS[preset],
                      date.fromisoformat(week_start))
@@ -233,7 +238,8 @@ save({"me": me_ids, "opponent": opp_ids, "window": window, "games": st.session_s
 games_key = tuple(sorted(week_games.items()))
 sat_key = tuple((side, d, tuple(ids)) for side, days in sorted(st.session_state["sat"].items())
                 for d, ids in sorted(days.items()) if ids)
-result = run_projection(tuple(me_ids), tuple(opp_ids), preset, window, as_of, games_key, sat_key)
+result = run_projection(tuple(me_ids), tuple(opp_ids), preset, window, as_of, games_key, sat_key,
+                        CODE_VERSION)
 summary = result["summary"]
 WINNER_TEXT = {"me": "Me", "opponent": "Opponent", "toss-up": "Toss-up"}
 
@@ -360,7 +366,7 @@ with tab_whatif:
         if len(new_me) > roster_size:
             st.warning(f"That's {len(new_me)} players, over your {roster_size}-man roster.")
         alt = run_projection(tuple(new_me), tuple(opp_ids), preset, window, as_of, games_key,
-                             sat_key)
+                             sat_key, CODE_VERSION)
         a_sum = alt["summary"]
         m1, m2, m3 = st.columns(3)
         m1.metric("Result", a_sum["text"].replace("Projected ", ""),
@@ -390,7 +396,7 @@ with tab_league:
                "50 simulated drafts of the best players, everyone's week projected the same way "
                "(this season's averages × games this week, at most 10 a day). "
                "Your real league comes in once Yahoo access is approved.")
-    bench_res = run_benchmark(tuple(me_ids), preset, week_start)
+    bench_res = run_benchmark(tuple(me_ids), preset, week_start, CODE_VERSION)
     b1, b2, b3 = st.columns(3)
     b1.metric(f"Rank of {bench_res['league_size']}", f"~{bench_res['rank']:g}",
               f"range {bench_res['rank_best']}–{bench_res['rank_worst']}", delta_color="off")
