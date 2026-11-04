@@ -349,17 +349,39 @@ with tab_league:
                "aren't applied here.")
 
 with tab_players:
+    all_stats = st.toggle("Show all stats")
+    if all_stats:
+        view = st.radio("Stats", ["so far", "projected", "rest"], horizontal=True,
+                        format_func={"so far": "So far", "projected": "Whole week (projected)",
+                                     "rest": "Rest of week"}.get)
+
+    def stat_cells(p: dict) -> dict:
+        if not all_stats:
+            return {"PTS so far": round(p["current"]["pts"]),
+                    "PTS projected": round(p["current"]["pts"] + p["projected_rest"]["pts"])}
+        t = {"so far": p["current"], "rest": p["projected_rest"],
+             "projected": {s: p["current"][s] + p["projected_rest"][s] for s in p["current"]}}[view]
+        cells = {}
+        for cat in settings.categories:
+            if cat.is_pct:
+                cells[cat.name] = (f"{t[cat.made]:.0f}/{t[cat.attempted]:.0f} "
+                                   f"({fmt(cat.value(t), True)})" if t[cat.attempted] else "–")
+            else:
+                cells[cat.name] = round(cat.value(t)) if view == "so far" else round(cat.value(t), 1)
+        return cells
+
     for side, title in (("me", "My team"), ("opponent", "Opponent")):
         st.markdown(f"**{title}**")
         st.dataframe(pd.DataFrame([{
             "Player": p["name"],
             "Team": p["team"],
             "Status": p["injury"] or "",
-            "Played": p["games_played"],
+            "Games counted": p["games_played"],
             "Plays (of left)": f"{p['games_assumed']} of {p['team_games_left']}",
-            "Starts": p["games_remaining"],
-            "Benched": p["games_benched"],
+            "Games to count": p["games_remaining"],
+            "Sat (not counted)": p["games_benched"],
             "Stats from": f"{WINDOW_LABELS.get(p['avg_source'], 'none')} ({p['avg_games']}g)",
-            "PTS so far": round(p["current"]["pts"]),
-            "PTS projected": round(p["current"]["pts"] + p["projected_rest"]["pts"]),
+            **stat_cells(p),
         } for p in result["teams"][side]["players"]]), hide_index=True, width="stretch")
+    st.caption("Sat = games on days when more than 10 of the team's players played; the ones "
+               "with the fewest minutes are assumed to sit, so those games don't count.")
