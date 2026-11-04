@@ -207,14 +207,18 @@ with st.expander("Games each player plays (injuries, rest)", expanded=False):
     st.caption("Change **Plays** to assume a player sits some or all of his team's remaining "
                "games, or to bring an Out player back. Fewer than all = his last games of the week.")
     editor_key = "games_" + hashlib.md5(f"{week_start}|{me_ids}|{opp_ids}".encode()).hexdigest()[:10]
-    edited = st.data_editor(
-        games_df.drop(columns=["id", "_default"]),
-        key=editor_key, hide_index=True, width="stretch",
-        disabled=["Team", "Player", "NBA", "Status", "Games left"],
-        column_config={"Plays": st.column_config.NumberColumn(min_value=0, step=1, format="%d")},
-    )
+    edited_plays = []
+    for side, title in (("Me", "My team"), ("Opponent", "Opponent")):
+        st.markdown(f"**{title}**")
+        edited = st.data_editor(
+            games_df[games_df["Team"] == side].drop(columns=["id", "_default", "Team"]),
+            key=f"{editor_key}_{side}", hide_index=True, width="stretch",
+            disabled=["Player", "NBA", "Status", "Games left"],
+            column_config={"Plays": st.column_config.NumberColumn(min_value=0, step=1, format="%d")},
+        )
+        edited_plays += list(edited["Plays"])
     clamped = []
-    for row, plays in zip(rows, edited["Plays"]):
+    for row, plays in zip(rows, edited_plays):
         n = max(0, min(int(plays if pd.notna(plays) else row["_default"]), row["Games left"]))
         if n != plays:
             clamped.append(row["Player"])
@@ -267,6 +271,15 @@ with tab_matchup:
         left = remaining_starts(result, side)
         col.metric(title, total_starts(result, side),
                    None if week == "next" else f"{left} left", delta_color="off")
+        with col.expander("Show players"):
+            players = sorted(result["teams"][side]["players"],
+                             key=lambda p: -(p["games_played"] + p["games_remaining"]))
+            st.dataframe(pd.DataFrame([{
+                "Player": p["name"],
+                **({"Games": p["games_remaining"]} if week == "next" else
+                   {"Played": p["games_played"], "Left": p["games_remaining"]}),
+                "Sat": p["games_benched"],
+            } for p in players]), hide_index=True, width="stretch")
     st.caption(f"Games = every player's games added up, but at most "
                f"{len(settings.starting_slots)} count on any one day.")
 
