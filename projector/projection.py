@@ -42,7 +42,10 @@ def _starters(candidates: list[dict], slots: list[str]) -> set[str]:
 
 def _project_team(roster: list[dict], settings: LeagueSettings, window: str,
                   today: date, monday: date, sunday: date,
-                  remaining: dict[str, list[str]]) -> dict:
+                  remaining: dict[str, list[str]], sat: dict[str, list[str]] | None = None) -> dict:
+    """`sat`: date -> ids known to have sat that day (past days with more players than
+    slots); they only start if there's still room. Other days, fewest minutes sit."""
+    sat = sat or {}
     # A future `today` (projecting next week) still averages the games played up to now.
     stats_date = min(today, nba_today())
     players = []
@@ -72,7 +75,10 @@ def _project_team(roster: list[dict], settings: LeagueSettings, window: str,
     while day <= sunday:
         d = day.isoformat()
         playing = [p for p in priority if d in p["played"] or d in p["upcoming"]]
-        starting = _starters(playing, settings.starting_slots)
+        benched_first = set(sat.get(d, []))
+        starting = _starters([p for p in playing if p["id"] not in benched_first]
+                             + [p for p in playing if p["id"] in benched_first],
+                             settings.starting_slots)
         for p in playing:
             if p["id"] not in starting:
                 p["games_benched"] += 1
@@ -90,6 +96,8 @@ def _project_team(roster: list[dict], settings: LeagueSettings, window: str,
             "with_games": len(playing),
             "starting": len(starting),
             "benched": [p["name"] for p in playing if p["id"] not in starting],
+            "playing_ids": [p["id"] for p in playing],
+            "benched_ids": [p["id"] for p in playing if p["id"] not in starting],
             "open_slots": len(settings.starting_slots) - len(starting),
         })
         day += timedelta(days=1)
@@ -159,12 +167,15 @@ def compare(settings: LeagueSettings, mine: dict, theirs: dict,
 
 
 def project_matchup(me: list[dict], opponent: list[dict], settings: LeagueSettings,
-                    window: str = "season", today: date | None = None) -> dict:
+                    window: str = "season", today: date | None = None,
+                    sat: dict[str, dict[str, list[str]]] | None = None) -> dict:
     """Full projection as a JSON-serializable dict; every view renders from this."""
     today = today or nba_today()
     monday, sunday = fantasy_week(today)
     remaining = remaining_games(today)
-    teams = {side: _project_team(roster, settings, window, today, monday, sunday, remaining)
+    sat = sat or {}
+    teams = {side: _project_team(roster, settings, window, today, monday, sunday, remaining,
+                                 sat.get(side))
              for side, roster in (("me", me), ("opponent", opponent))}
     rng = np.random.default_rng(0)  # fixed seed: same inputs give the same chances
     sims = (simulate(teams["me"], rng), simulate(teams["opponent"], rng))

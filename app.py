@@ -43,14 +43,19 @@ def team_games_left(as_of: date | None) -> dict[str, int]:
 
 @st.cache_data(ttl=1800, show_spinner="Crunching the matchup…")
 def run_projection(me: tuple[str, ...], opp: tuple[str, ...], preset: str, window: str,
-                   as_of: date | None, games: tuple[tuple[str, int], ...]) -> dict:
+                   as_of: date | None, games: tuple[tuple[str, int], ...],
+                   sat: tuple[tuple[str, str, tuple[str, ...]], ...] = ()) -> dict:
     directory = players_by_id()
     overrides = dict(games)
 
     def roster(ids):
         return [{**directory[i], "games_override": overrides.get(i)} for i in ids]
 
-    return project_matchup(roster(me), roster(opp), PRESETS[preset], window=window, today=as_of)
+    sat_by_side: dict[str, dict[str, list[str]]] = {}
+    for side, day, ids in sat:
+        sat_by_side.setdefault(side, {})[day] = list(ids)
+    return project_matchup(roster(me), roster(opp), PRESETS[preset], window=window,
+                           today=as_of, sat=sat_by_side)
 
 
 @st.cache_data(ttl=3600, show_spinner="Simulating a league…")
@@ -79,11 +84,31 @@ def decode_games(text: str) -> dict[str, dict[str, int]]:
     return games
 
 
+# Who sat on past crowded days, when the app's guess was wrong: "m~2026-11-02~123.456_o~...".
+SIDE_CODES = {"me": "m", "opponent": "o"}
+
+
+def encode_sat(sat: dict[str, dict[str, list[str]]]) -> str:
+    return "_".join(f"{SIDE_CODES[side]}~{day}~{'.'.join(ids)}"
+                    for side, days in sorted(sat.items()) for day, ids in sorted(days.items()) if ids)
+
+
+def decode_sat(text: str) -> dict[str, dict[str, list[str]]]:
+    sides = {code: side for side, code in SIDE_CODES.items()}
+    sat: dict[str, dict[str, list[str]]] = {}
+    for chunk in filter(None, text.split("_")):
+        parts = chunk.split("~")
+        if len(parts) == 3 and parts[0] in sides:
+            sat.setdefault(sides[parts[0]], {})[parts[1]] = parts[2].split(".")
+    return sat
+
+
 def load_saved() -> dict:
     q = st.query_params
     if "me" in q or "opp" in q:
         return {"me": q.get("me", "").split(","), "opponent": q.get("opp", "").split(","),
-                "window": q.get("w", "season"), "games": decode_games(q.get("g", ""))}
+                "window": q.get("w", "season"), "games": decode_games(q.get("g", "")),
+                "sat": decode_sat(q.get("s", ""))}
     try:  # one-time carry-over of rosters saved by earlier local versions
         return json.loads(LEGACY_ROSTERS_FILE.read_text())
     except (FileNotFoundError, json.JSONDecodeError):
@@ -93,8 +118,10 @@ def load_saved() -> dict:
 def save(state: dict) -> None:
     this_monday = fantasy_week(nba_today())[0].isoformat()
     games = {w: g for w, g in state["games"].items() if w >= this_monday}
+    sat = {side: {d: ids for d, ids in days.items() if d >= this_monday}
+           for side, days in st.session_state.get("sat", {}).items()}
     params = {"me": ",".join(state["me"]), "opp": ",".join(state["opponent"]),
-              "w": state["window"], "g": encode_games(games)}
+              "w": state["window"], "g": encode_games(games), "s": encode_sat(sat)}
     params = {k: v for k, v in params.items() if v}
     if dict(st.query_params) != params:
         st.query_params.from_dict(params)
@@ -124,6 +151,8 @@ if "window" not in st.session_state:
     st.session_state["window"] = w if w in WINDOW_LABELS else "season"
 if "games" not in st.session_state:
     st.session_state["games"] = saved.get("games", {})
+if "sat" not in st.session_state:
+    st.session_state["sat"] = saved.get("sat", {})
 
 with st.sidebar:
     st.header("Settings")
@@ -199,7 +228,9 @@ with st.expander("Games each player plays (injuries, rest)", expanded=False):
 save({"me": me_ids, "opponent": opp_ids, "window": window, "games": st.session_state["games"]})
 
 games_key = tuple(sorted(week_games.items()))
-result = run_projection(tuple(me_ids), tuple(opp_ids), preset, window, as_of, games_key)
+sat_key = tuple((side, d, tuple(ids)) for side, days in sorted(st.session_state["sat"].items())
+                for d, ids in sorted(days.items()) if ids)
+result = run_projection(tuple(me_ids), tuple(opp_ids), preset, window, as_of, games_key, sat_key)
 summary = result["summary"]
 WINNER_TEXT = {"me": "Me", "opponent": "Opponent", "toss-up": "Toss-up"}
 
@@ -278,6 +309,35 @@ with tab_days:
     st.caption(f"✓ = already played. Total games this week: me {total_starts(result)}, "
                f"opponent {total_starts(result, 'opponent')}.")
 
+    # Past days with more players than slots: show the guess of who sat, and let it be fixed.
+    crowded = [(side, d) for side in ("me", "opponent")
+               for d in result["teams"][side]["daily"] if d["past"] and d["benched_ids"]]
+    if crowded:
+        with st.expander("Who sat on past days? (fix the guess)"):
+            st.caption("On these days more players played than there are slots, so some sat "
+                       "and their stats don't count. The app guesses the ones with the fewest "
+                       "minutes; change it to match who actually sat in Yahoo.")
+
+            def remember_sat(side: str, day: str, key: str) -> None:
+                st.session_state["sat"].setdefault(side, {})[day] = st.session_state[key]
+
+            for side, d in crowded:
+                key = f"sat_{side}_{d['date']}"
+                picked = [i for i in st.session_state["sat"].get(side, {}).get(d["date"], [])
+                          if i in d["playing_ids"]]
+                st.session_state[key] = picked or d["benched_ids"]
+                who = "Me" if side == "me" else "Opponent"
+                st.multiselect(
+                    f"{who} · {date.fromisoformat(d['date']).strftime('%a %b %-d')}: "
+                    f"{d['with_games']} played, {len(d['benched_ids'])} sat",
+                    d["playing_ids"], key=key, format_func=lambda i: directory[i]["name"],
+                    max_selections=len(d["benched_ids"]),
+                    on_change=remember_sat, args=(side, d["date"], key))
+            if any(st.session_state["sat"].values()):
+                if st.button("Back to the app's guesses"):
+                    st.session_state["sat"] = {}
+                    st.rerun()
+
 with tab_whatif:
     st.caption("Try a roster move and see the matchup with it. Your real roster isn't changed.")
     on_rosters = set(me_ids) | set(opp_ids)
@@ -293,7 +353,8 @@ with tab_whatif:
         new_me = [i for i in me_ids if i not in drops] + adds
         if len(new_me) > roster_size:
             st.warning(f"That's {len(new_me)} players, over your {roster_size}-man roster.")
-        alt = run_projection(tuple(new_me), tuple(opp_ids), preset, window, as_of, games_key)
+        alt = run_projection(tuple(new_me), tuple(opp_ids), preset, window, as_of, games_key,
+                             sat_key)
         a_sum = alt["summary"]
         m1, m2, m3 = st.columns(3)
         m1.metric("Result", a_sum["text"].replace("Projected ", ""),
