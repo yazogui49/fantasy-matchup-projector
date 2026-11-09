@@ -100,21 +100,24 @@ def _h2h(a: np.ndarray, b: np.ndarray) -> np.ndarray:
 
 
 def _window_averages(window: str, roster: list[dict], directory: dict[str, dict],
-                     settings: LeagueSettings, roster_size: int, today: date) -> dict[str, dict]:
+                     settings: LeagueSettings, roster_size: int, today: date,
+                     skip_out: bool) -> dict[str, dict]:
     """Per-player averages for `window`, for the players a draft could reach (the best
     by this season) plus the roster. The pool is the same for every window, so switching
     windows only changes the stats, not who's in the league. Whole seasons come from one
     all-player request; recent windows from game logs."""
     this_season = season_averages()
     eligible = [pid for pid, a in this_season.items() if a["games"] >= MIN_GAMES
-                and pid in directory and directory[pid]["injury"] != "Out"]
+                and pid in directory and not (skip_out and directory[pid]["injury"] == "Out")]
     value = _values([this_season[pid] for pid in eligible], settings)
     reach = [eligible[i] for i in np.argsort(-value)[:TEAMS * roster_size * POOL_FACTOR]]
     ids = list(dict.fromkeys(reach + [p["id"] for p in roster]))
+    last = season_averages(today.year - 1 if today.month < 8 else today.year)
     if window == "season":
-        return {pid: this_season[pid] for pid in ids if pid in this_season}
+        # Hasn't played this season (e.g. injured since opening night): last season.
+        return {pid: this_season.get(pid) or last[pid] for pid in ids
+                if pid in this_season or pid in last}
     if window == "lastseason":
-        last = season_averages(today.year - 1 if today.month < 8 else today.year)
         # Rookies keep this season's numbers.
         return {pid: last.get(pid) or this_season[pid] for pid in ids
                 if pid in last or pid in this_season}
@@ -132,16 +135,19 @@ def benchmark(roster: list[dict], directory: dict[str, dict], settings: LeagueSe
     slots = len(settings.starting_slots)
     roster_size = slots + settings.bench
     stats_day = nba_today()  # averages use every game played so far, whichever week
-    avgs = _window_averages(window, roster, directory, settings, roster_size, stats_day)
+    # This week, Out players really won't play. Over the rest of the season they'll come
+    # back, so they count at their averages (and stay in the draft pool, as on real teams).
+    skip_out = horizon == "week"
+    avgs = _window_averages(window, roster, directory, settings, roster_size, stats_day, skip_out)
 
     def player(pid: str) -> dict:
         info = directory.get(pid, {})
         return {"id": pid, "team": info.get("team"),
                 "per_game": avgs.get(pid, {}).get("per_game", {})}
 
-    # Draft pool: current players who've played, minus anyone Out (they'd sit on IL).
-    pool = [player(pid) for pid, a in avgs.items()
-            if a["games"] >= MIN_GAMES and pid in directory and directory[pid]["injury"] != "Out"]
+    # Draft pool: current players who've played (this week: minus anyone Out, on IL).
+    pool = [player(pid) for pid, a in avgs.items() if a["games"] >= MIN_GAMES and pid in directory
+            and not (skip_out and directory[pid]["injury"] == "Out")]
     value = _values(pool, settings)
 
     rng = np.random.default_rng(seed)
@@ -155,7 +161,8 @@ def benchmark(roster: list[dict], directory: dict[str, dict], settings: LeagueSe
             teams[pos if rnd % 2 == 0 else TEAMS - 1 - pos].append(pool[idx])
         league_teams.append([_week_totals(t, schedule, slots) for t in teams])
 
-    mine_players = [player(p["id"]) for p in roster if p.get("injury") != "Out"]
+    mine_players = [player(p["id"]) for p in roster
+                    if not (skip_out and p.get("injury") == "Out")]
     mine = _week_totals(mine_players, schedule, slots)
     me = _cat_matrix([mine], settings)[0]
     all_teams = [t for league in league_teams for t in league]

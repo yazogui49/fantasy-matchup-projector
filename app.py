@@ -423,6 +423,8 @@ with tab_whatif:
             "Change": f"{(a['beats_pct'] - n['beats_pct']) * 100:+.0f} pts",
         } for n, a in zip(b_now["categories"], b_alt["categories"])]),
             hide_index=True, width="stretch")
+        if horizon == "season":
+            st.caption("Rest of season: injured players count at their averages, as if healthy.")
 
 with tab_league:
     league_horizon = st.radio("Over", list(HORIZONS), format_func=HORIZONS.get, horizontal=True,
@@ -455,8 +457,10 @@ with tab_league:
                      " font-weight: 600" for v in col], subset=[""]),
         hide_index=True, width="stretch")
     st.caption(f"Games {span}: you {bench_res['games']['me']}, typical team "
-               f"{bench_res['games']['typical']:g}. Out players count as 0; the Plays overrides "
-               "aren't applied here.")
+               f"{bench_res['games']['typical']:g}. "
+               + ("Out players count as 0" if league_horizon == "week" else
+                  "Injured players count at their averages, as if healthy")
+               + "; the Plays overrides aren't applied here.")
 
 with tab_players:
     all_stats = st.toggle("Show all stats")
