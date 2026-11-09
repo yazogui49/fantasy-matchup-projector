@@ -419,8 +419,8 @@ with tab_whatif:
             "Category": a["category"],
             "Now": fmt(n["me"], n["is_pct"]),
             "With move": fmt(a["me"], a["is_pct"]),
+            "Total change": f"{a['me'] - n['me']:+.3f}" if n["is_pct"] else f"{a['me'] - n['me']:+.0f}",
             "Better than (teams)": f"{n['beats_pct']:.0%} → {a['beats_pct']:.0%}",
-            "Change": f"{(a['beats_pct'] - n['beats_pct']) * 100:+.0f} pts",
         } for n, a in zip(b_now["categories"], b_alt["categories"])]),
             hide_index=True, width="stretch")
         if horizon == "season":
