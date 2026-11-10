@@ -15,7 +15,7 @@ written back to Yahoo.
    rosters by hand (searchable list of every NBA player, from ESPN).
 2. Stats so far this week come from real box scores; the rest of the week is
    per-game average × games remaining (choose: this season, last 30 days, last season, ...,
-   or Yahoo's own projections for the next 7 days when a Yahoo league is loaded).
+   or Yahoo's own projection for each remaining game when a Yahoo league is loaded).
 3. At most 10 players count per day (positions ignored until Yahoo eligibility is in), and FG%/FT%
    are projected from makes and attempts, never averaged percentages.
 4. Category-by-category comparison; anything within 5% is a toss-up.

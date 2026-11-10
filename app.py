@@ -27,7 +27,7 @@ WINDOW_LABELS = {
     "lastseason": "Last season",
     "last14": "Last 14 days",
     "last7": "Last 7 days",
-    "yahoo7": "Yahoo projections (next 7 days)",
+    "yahoo": "Yahoo projections",
 }
 WINNER_COLORS = {"me": "#1a7f37", "opponent": "#cf222e", "toss-up": "#9a6700"}
 
@@ -57,7 +57,12 @@ def run_projection(me: tuple[str, ...], opp: tuple[str, ...], preset: str, windo
     """`yahoo`: (league id, team ids...) to read Yahoo's projections from."""
     directory = players_by_id()
     overrides = dict(games)
-    projected = yahoo_projections(yahoo[0], yahoo[1:]) if yahoo and window in YAHOO_WINDOWS else {}
+    projected = {}
+    if yahoo and window in YAHOO_WINDOWS:
+        today = as_of or nba_today()
+        sunday = fantasy_week(today)[1]
+        days = tuple((today + timedelta(days=i)).isoformat() for i in range((sunday - today).days + 1))
+        projected = yahoo_projections(yahoo[0], yahoo[1:], days)
 
     def roster(ids):
         return [{**directory[i], "games_override": overrides.get(i), "projection": projected.get(i)}
@@ -76,15 +81,17 @@ def yahoo_league(lid: str) -> dict:
 
 
 @st.cache_data(ttl=1800, show_spinner="Loading Yahoo's projections…")
-def yahoo_projections(lid: str, teams: tuple[str, ...]) -> dict[str, dict]:
-    """ESPN id -> Yahoo's projected per-game stats (next 7 days), for these teams' players."""
+def yahoo_projections(lid: str, teams: tuple[str, ...], days: tuple[str, ...]) -> dict[str, dict]:
+    """ESPN id -> {date: Yahoo's projected stats for that day's game}, for these teams'
+    players over the given days (one Yahoo page per team per day)."""
     directory = players_by_id()
-    projected = {}
+    projected: dict[str, dict] = {}
     for tid in teams:
-        players = yahoo_web.projections(lid, tid)
-        for pid, p in zip(yahoo_web.find(players, directory), players):
-            if pid:
-                projected[pid] = p["per_game"]
+        for day in days:
+            players = yahoo_web.day_projections(lid, tid, day)
+            for pid, p in zip(yahoo_web.find(players, directory), players):
+                if pid:
+                    projected.setdefault(pid, {})[day] = p["per_game"]
     return projected
 
 
@@ -445,7 +452,8 @@ with tab_matchup:
                  hide_index=True, width="stretch")
     st.caption("Win chance: the rest of the week replayed 2,000 times, drawing each game from "
                "the player's real games in the chosen window (for Yahoo's projections: this season's "
-               "games, scaled to Yahoo's numbers). 40–60% counts as a toss-up.")
+               "games, scaled to Yahoo's projection for each day's game). 40–60% counts as a "
+               "toss-up.")
 
 with tab_days:
     n_slots = len(settings.starting_slots)

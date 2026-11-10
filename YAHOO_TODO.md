@@ -8,8 +8,9 @@ players typed in.
 Done:
 - **Rosters load automatically**: paste a league link, pick your team, and your roster
   and that week's opponent load; switch between saved leagues at the top.
-- **Yahoo's 7-day projections** as a "Project using" option (per game = Yahoo's
-  next-7-days totals ÷ its projected games; the app's own schedule decides the games).
+- **Yahoo's projections** as a "Project using" option: Yahoo's projection for each
+  remaining day's game (so it knows the opponent); the app's schedule and overrides
+  decide which games count.
 
 Possible from the public pages, not built yet:
 1. **Real position eligibility**: team pages list Yahoo's positions (e.g. "LAC - PG,SG").

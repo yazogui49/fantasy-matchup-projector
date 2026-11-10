@@ -15,8 +15,9 @@ TOSS_UP = (0.40, 0.60)  # win chance inside this band = toss-up
 # ESPN positions don't match Yahoo eligibility (e.g. Yahoo adds SG to some forwards),
 # so until Yahoo data is in, only the number of slots limits each day's starters.
 USE_POSITIONS = False
-# Windows that use Yahoo's per-game projections (given on each player as "projection").
-YAHOO_WINDOWS = {"yahoo7"}
+# Windows that use Yahoo's projections, given on each player as "projection":
+# date -> projected stats for that day's game.
+YAHOO_WINDOWS = {"yahoo"}
 
 
 def _starters(candidates: list[dict], slots: list[str]) -> set[str]:
@@ -43,19 +44,26 @@ def _starters(candidates: list[dict], slots: list[str]) -> set[str]:
 
 
 def _averages(p: dict, window: str, stats_date: date) -> dict:
-    """Per-game stats for the window. Yahoo windows: Yahoo's projection, with this
-    season's real games scaled to match it, so the win chances keep each player's real
-    game-to-game swings. Players without one (not on a team in the league) use this season."""
+    """Per-game stats for the window. Yahoo windows: this season's, which cover the days
+    Yahoo has no projection for (and players not on a team in the league)."""
     if window not in YAHOO_WINDOWS:
         return averages(p["id"], window, stats_date)
     base = averages(p["id"], "season", stats_date)
-    if not p.get("projection"):
-        return base
-    # Yahoo doesn't project minutes or 3-point attempts: those stay as this season's.
-    per_game = {s: p["projection"].get(s, base["per_game"][s]) for s in STATS}
-    scale = {s: per_game[s] / base["per_game"][s] if base["per_game"][s] else 1.0 for s in STATS}
-    return {"source": window, "games": base["games"], "per_game": per_game,
-            "pool": [{s: g.get(s, 0.0) * scale[s] for s in STATS} for g in base["pool"]]}
+    return {**base, "source": window} if p.get("projection") else base
+
+
+def _sim_pool(p: dict) -> list[dict]:
+    """The real games to resample a player's remaining starts from, scaled to average
+    what was projected per start. Only Yahoo projections differ from the window's own
+    average; scaling keeps each player's real game-to-game swings."""
+    pool, starts = p["avg"]["pool"], p["games_remaining"]
+    if not p.get("projection") or not pool or not starts:
+        return pool
+    scale = {}
+    for s in STATS:
+        mean = sum(g.get(s, 0.0) for g in pool) / len(pool)
+        scale[s] = p["projected_rest"][s] / starts / mean if mean else 1.0
+    return [{s: g.get(s, 0.0) * scale[s] for s in STATS} for g in pool]
 
 
 def _project_team(roster: list[dict], settings: LeagueSettings, window: str,
@@ -106,8 +114,10 @@ def _project_team(roster: list[dict], settings: LeagueSettings, window: str,
                     p["current"][s] += p["played"][d].get(s, 0)
             else:
                 p["games_remaining"] += 1
+                # Yahoo's projection for this day's game, where there is one.
+                day_stats = (p.get("projection") or {}).get(d) or {}
                 for s in STATS:
-                    p["projected_rest"][s] += p["avg"]["per_game"][s]
+                    p["projected_rest"][s] += day_stats.get(s, p["avg"]["per_game"][s])
         daily.append({
             "date": d,
             "past": d < today.isoformat(),
@@ -146,7 +156,7 @@ def _project_team(roster: list[dict], settings: LeagueSettings, window: str,
         } for p in players],
         # Not part of the JSON result: each starter's remaining games and the real
         # games to resample them from, for simulate().
-        "_sim": [(p["games_remaining"], p["avg"]["pool"]) for p in players],
+        "_sim": [(p["games_remaining"], _sim_pool(p)) for p in players],
     }
 
 

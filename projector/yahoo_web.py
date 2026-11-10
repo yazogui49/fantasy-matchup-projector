@@ -140,12 +140,9 @@ _PROJECTED = {"FGM/A*": ("fgm", "fga"), "FTM/A*": ("ftm", "fta"), "3PTM": ("fg3m
 PROJECTION_PERIODS = {"next7": "PS7", "rest": "PSR"}
 
 
-def projections(lid: str, tid: str, period: str = "next7") -> list[dict]:
-    """Yahoo's projected per-game stats for a team's players: [{'name', 'team', 'per_game'}].
-    Yahoo projects totals over the period (next 7 days, or the rest of the season) and
-    the games he'll play in it; per game = one over the other. Players Yahoo projects to
-    play no games are left out."""
-    page = _page(f"{lid}/{tid}?stat1=P&stat2={PROJECTION_PERIODS[period]}")
+def _projected(page: str) -> list[dict]:
+    """[{'name', 'team', 'per_game'}] from a projected-stats page: Yahoo's projected
+    totals divided by its projected games. Players with no games projected are left out."""
     out = []
     for row in _player_rows(page):
         games = _number(row["cells"].get("GP*"))
@@ -158,6 +155,18 @@ def projections(lid: str, tid: str, period: str = "next7") -> list[dict]:
                 per_game.update({k: v / games for k, v in zip(keys, values)})
         out.append({"name": row["name"], "team": row["team"], "per_game": per_game})
     return out
+
+
+def projections(lid: str, tid: str, period: str = "next7") -> list[dict]:
+    """Yahoo's projected per-game stats over a period: the next 7 days from today, or
+    the rest of the season."""
+    return _projected(_page(f"{lid}/{tid}?stat1=P&stat2={PROJECTION_PERIODS[period]}"))
+
+
+def day_projections(lid: str, tid: str, day: str) -> list[dict]:
+    """Yahoo's projection for one day (YYYY-MM-DD), for the players with a game that
+    day: it accounts for that game's opponent. Yahoo projects next week's days too."""
+    return _projected(_page(f"{lid}/{tid}/team?date={day}&stat1=P&stat2=P"))
 
 
 def find(players: list[dict], directory: dict[str, dict]) -> list[str | None]:
@@ -190,6 +199,7 @@ if __name__ == "__main__":
     import sys
 
     from .players import load_players
+    from .schedule import nba_today
 
     lid, tid = parse_link(sys.argv[1] if len(sys.argv) > 1 else "3170/11")
     info = league(lid)
@@ -206,8 +216,8 @@ if __name__ == "__main__":
               + (f", not found: {', '.join(missing)}" if missing else ""))
         for p in players:
             print(f"  {p['slot'] or '':<3} {p['name']:<26} {p['team']:<5} {','.join(p['positions'])}")
-    print("\nYahoo per-game projections, next 7 days (my team):")
-    for p in projections(lid, tid):
+    print("\nYahoo projections for today (my team):")
+    for p in day_projections(lid, tid, nba_today().isoformat()):
         g = p["per_game"]
         print(f"  {p['name']:<26} " + "  ".join(f"{k} {g[k]:.1f}" for k in ("pts", "reb", "ast", "stl", "blk", "fg3m") if k in g)
               + (f"  FG {g['fgm'] / g['fga']:.3f}" if g.get("fga") else ""))
