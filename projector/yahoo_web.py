@@ -85,33 +85,88 @@ def opponent(lid: str, tid: str, week: int) -> str | None:
     return others.pop() if len(others) == 1 else None
 
 
-def roster(lid: str, tid: str) -> list[dict]:
-    """Today's roster: [{'name', 'team' (ESPN code), 'positions', 'slot'}].
-    `slot` is the lineup spot (PG ... C, BN, IL); `positions` is Yahoo's eligibility."""
-    players = []
-    for row in re.findall(r"<tr[^>]*>.*?</tr>", _page(f"{lid}/{tid}"), re.S):
-        name = re.search(r'title="([^"]+)" data-yga', row)
-        team_pos = re.search(r'<span class="Fz-xxs">([^<]+)</span>', row)
+def _text(cell: str) -> str:
+    return html.unescape(re.sub(r"<[^>]+>|\s+", " ", cell)).strip()
+
+
+def _number(text: str | None) -> float | None:
+    try:
+        return float((text or "").replace(",", ""))
+    except ValueError:
+        return None  # "-": no projection
+
+
+def _player_rows(page: str) -> list[dict]:
+    """Player rows of a team page: name, team (ESPN code), Yahoo positions, lineup slot,
+    and the stat cells by column header."""
+    tables = re.findall(r"<table.*?</table>", page, re.S)
+    table = max(tables, key=lambda t: t.count("data-ys-playerid"), default="")
+    heads: list[str] = []
+    rows = []
+    for tr in re.findall(r"<tr[^>]*>.*?</tr>", table, re.S):
+        name = re.search(r'title="([^"]+)" data-yga', tr)
+        team_pos = re.search(r'<span class="Fz-xxs">([^<]+)</span>', tr)
         if not name or not team_pos:
+            cells = [_text(c) for c in re.findall(r"<th[^>]*>(.*?)</th>", tr, re.S)]
+            if "Players" in cells:
+                heads = cells
             continue
         team, _, positions = html.unescape(team_pos.group(1)).partition(" - ")
-        slot = re.search(r'data-pos="([^"]*)"', row)
-        players.append({
+        slot = re.search(r'data-pos="([^"]*)"', tr)
+        cells = [_text(c) for c in re.findall(r"<td[^>]*>(.*?)</td>", tr, re.S)]
+        rows.append({
             "name": html.unescape(name.group(1)),
             "team": TEAM_CODES.get(team.strip(), team.strip()),
             "positions": [p for p in positions.strip().split(",") if p],
             "slot": slot.group(1) if slot else None,
+            # Some headers span two cells (e.g. "Action"), all before the stats: line
+            # headers up with cells from the right.
+            "cells": dict(zip(reversed(heads), reversed(cells))),
         })
-    return players
+    return rows
 
 
-def match(players: list[dict], directory: dict[str, dict]) -> tuple[list[str], list[str]]:
-    """ESPN ids for Yahoo players, by name (team breaks ties, and catches spellings like
-    'Nicolas'/'Nic'). Returns (ids, names of players not found)."""
+def roster(lid: str, tid: str) -> list[dict]:
+    """Today's roster: [{'name', 'team' (ESPN code), 'positions', 'slot'}].
+    `slot` is the lineup spot (PG ... C, BN, IL); `positions` is Yahoo's eligibility."""
+    return [{k: r[k] for k in ("name", "team", "positions", "slot")}
+            for r in _player_rows(_page(f"{lid}/{tid}"))]
+
+
+# Yahoo projection column -> our stat key; "made/attempted" columns hold two.
+_PROJECTED = {"FGM/A*": ("fgm", "fga"), "FTM/A*": ("ftm", "fta"), "3PTM": ("fg3m",),
+              "PTS": ("pts",), "REB": ("reb",), "AST": ("ast",), "ST": ("stl",),
+              "BLK": ("blk",), "TO": ("tov",)}
+PROJECTION_PERIODS = {"next7": "PS7", "rest": "PSR"}
+
+
+def projections(lid: str, tid: str, period: str = "next7") -> list[dict]:
+    """Yahoo's projected per-game stats for a team's players: [{'name', 'team', 'per_game'}].
+    Yahoo projects totals over the period (next 7 days, or the rest of the season) and
+    the games he'll play in it; per game = one over the other. Players Yahoo projects to
+    play no games are left out."""
+    page = _page(f"{lid}/{tid}?stat1=P&stat2={PROJECTION_PERIODS[period]}")
+    out = []
+    for row in _player_rows(page):
+        games = _number(row["cells"].get("GP*"))
+        if not games:
+            continue
+        per_game = {}
+        for head, keys in _PROJECTED.items():
+            values = [_number(v) for v in row["cells"].get(head, "").split("/")]
+            if len(values) == len(keys) and None not in values:
+                per_game.update({k: v / games for k, v in zip(keys, values)})
+        out.append({"name": row["name"], "team": row["team"], "per_game": per_game})
+    return out
+
+
+def find(players: list[dict], directory: dict[str, dict]) -> list[str | None]:
+    """ESPN id for each Yahoo player (None if not found), by name: team breaks ties, and
+    catches spellings like 'Nicolas'/'Nic'."""
     by_name: dict[str, list[str]] = {}
     for pid, p in directory.items():
         by_name.setdefault(_normalize(p["name"]), []).append(pid)
-    ids, missing = [], []
+    ids = []
     for p in players:
         name = _normalize(p["name"])
         found = by_name.get(name, [])
@@ -120,11 +175,15 @@ def match(players: list[dict], directory: dict[str, dict]) -> tuple[list[str], l
             # Same team, same last name: almost surely the same player spelt differently.
             found = [pid for pid in same_team if _normalize(directory[pid]["name"]) == name
                      or _normalize(directory[pid]["name"]).split()[-1:] == name.split()[-1:]]
-        if len(found) == 1:
-            ids.append(found[0])
-        else:
-            missing.append(p["name"])
-    return ids, missing
+        ids.append(found[0] if len(found) == 1 else None)
+    return ids
+
+
+def match(players: list[dict], directory: dict[str, dict]) -> tuple[list[str], list[str]]:
+    """(ESPN ids of the players found, names of those not found)."""
+    ids = find(players, directory)
+    return ([i for i in ids if i],
+            [p["name"] for p, i in zip(players, ids) if not i])
 
 
 if __name__ == "__main__":
@@ -147,3 +206,8 @@ if __name__ == "__main__":
               + (f", not found: {', '.join(missing)}" if missing else ""))
         for p in players:
             print(f"  {p['slot'] or '':<3} {p['name']:<26} {p['team']:<5} {','.join(p['positions'])}")
+    print("\nYahoo per-game projections, next 7 days (my team):")
+    for p in projections(lid, tid):
+        g = p["per_game"]
+        print(f"  {p['name']:<26} " + "  ".join(f"{k} {g[k]:.1f}" for k in ("pts", "reb", "ast", "stl", "blk", "fg3m") if k in g)
+              + (f"  FG {g['fgm'] / g['fga']:.3f}" if g.get("fga") else ""))

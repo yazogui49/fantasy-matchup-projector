@@ -17,7 +17,7 @@ from projector.config import ROOT
 from projector.league import PRESETS
 from projector.output import fmt
 from projector.players import load_players
-from projector.projection import project_matchup
+from projector.projection import YAHOO_WINDOWS, project_matchup
 from projector.schedule import fantasy_week, nba_today, remaining_games
 
 LEGACY_ROSTERS_FILE = ROOT / "data" / "rosters.json"
@@ -27,6 +27,7 @@ WINDOW_LABELS = {
     "lastseason": "Last season",
     "last14": "Last 14 days",
     "last7": "Last 7 days",
+    "yahoo7": "Yahoo projections (next 7 days)",
 }
 WINNER_COLORS = {"me": "#1a7f37", "opponent": "#cf222e", "toss-up": "#9a6700"}
 
@@ -51,12 +52,16 @@ def team_games_left(as_of: date | None) -> dict[str, int]:
 @st.cache_data(ttl=1800, show_spinner="Crunching the matchup…")
 def run_projection(me: tuple[str, ...], opp: tuple[str, ...], preset: str, window: str,
                    as_of: date | None, games: tuple[tuple[str, int], ...],
-                   sat: tuple[tuple[str, str, tuple[str, ...]], ...], code: str) -> dict:
+                   sat: tuple[tuple[str, str, tuple[str, ...]], ...], code: str,
+                   yahoo: tuple[str, ...] = ()) -> dict:
+    """`yahoo`: (league id, team ids...) to read Yahoo's projections from."""
     directory = players_by_id()
     overrides = dict(games)
+    projected = yahoo_projections(yahoo[0], yahoo[1:]) if yahoo and window in YAHOO_WINDOWS else {}
 
     def roster(ids):
-        return [{**directory[i], "games_override": overrides.get(i)} for i in ids]
+        return [{**directory[i], "games_override": overrides.get(i), "projection": projected.get(i)}
+                for i in ids]
 
     sat_by_side: dict[str, dict[str, list[str]]] = {}
     for side, day, ids in sat:
@@ -68,6 +73,19 @@ def run_projection(me: tuple[str, ...], opp: tuple[str, ...], preset: str, windo
 @st.cache_data(ttl=1800, show_spinner="Reading the Yahoo league…")
 def yahoo_league(lid: str) -> dict:
     return yahoo_web.league(lid)
+
+
+@st.cache_data(ttl=1800, show_spinner="Loading Yahoo's projections…")
+def yahoo_projections(lid: str, teams: tuple[str, ...]) -> dict[str, dict]:
+    """ESPN id -> Yahoo's projected per-game stats (next 7 days), for these teams' players."""
+    directory = players_by_id()
+    projected = {}
+    for tid in teams:
+        players = yahoo_web.projections(lid, tid)
+        for pid, p in zip(yahoo_web.find(players, directory), players):
+            if pid:
+                projected[pid] = p["per_game"]
+    return projected
 
 
 @st.cache_data(ttl=1800, show_spinner="Loading rosters from Yahoo…")
@@ -192,8 +210,11 @@ with st.sidebar:
     preset = st.selectbox("League settings", list(PRESETS), format_func=lambda k: PRESETS[k].name)
     week = st.radio("Week", ["this", "next"], horizontal=True,
                     format_func={"this": "This week", "next": "Next week"}.get)
-    window = st.radio("Project using", list(WINDOW_LABELS), key="window",
-                      format_func=WINDOW_LABELS.get)
+    # Yahoo's projections need a Yahoo league to read them from.
+    windows = [w for w in WINDOW_LABELS if st.session_state["league"] or w not in YAHOO_WINDOWS]
+    if st.session_state["window"] not in windows:
+        st.session_state["window"] = "season"
+    window = st.radio("Project using", windows, key="window", format_func=WINDOW_LABELS.get)
     with st.expander("Testing"):
         pretend = st.checkbox("Pretend it's another day")
         as_of = st.date_input("Date", value=nba_today()) if pretend else None
@@ -268,6 +289,7 @@ with st.expander("Add a Yahoo league" if leagues else "Load your team from Yahoo
         st.button("Remove this league", on_click=remove_league)
 
 titles = {"me": "My team", "opponent": "Opponent"}
+yahoo_teams: tuple[str, ...] = ()  # (league, my team, opponent) for Yahoo's projections
 if st.session_state["league"]:
     lid, tid = st.session_state["league"].split(".")
     try:
@@ -282,6 +304,7 @@ if st.session_state["league"]:
         if st.session_state.get("loaded_for") != (lid, tid, yahoo_week):
             st.session_state["me"], st.session_state["opponent"] = loaded["me"], loaded["opponent"]
             st.session_state["loaded_for"] = (lid, tid, yahoo_week)
+        yahoo_teams = (lid, tid) + ((loaded["opponent_team"],) if loaded["opponent_team"] else ())
         titles["me"] += f" · {info['teams'].get(tid, '')}"
         if loaded["opponent_team"]:
             titles["opponent"] += f" · {info['teams'].get(loaded['opponent_team'], '')}"
@@ -352,9 +375,12 @@ games_key = tuple(sorted(week_games.items()))
 sat_key = tuple((side, d, tuple(ids)) for side, days in sorted(st.session_state["sat"].items())
                 for d, ids in sorted(days.items()))
 result = run_projection(tuple(me_ids), tuple(opp_ids), preset, window, as_of, games_key, sat_key,
-                        CODE_VERSION)
+                        CODE_VERSION, yahoo_teams)
 summary = result["summary"]
 WINNER_TEXT = {"me": "Me", "opponent": "Opponent", "toss-up": "Toss-up"}
+# Yahoo only projects the players on this league's teams, so league comparisons (which
+# draft from every NBA player) use this season's stats instead.
+bench_window = "season" if window in YAHOO_WINDOWS else window
 
 
 def styled_winner(df: pd.DataFrame, winners: list[str], column: str):
@@ -374,7 +400,8 @@ def total_starts(res: dict, side: str = "me") -> int:
 st.subheader(f"{summary['text']} · expected {summary['expected_wins']} categories")
 when = "nothing played yet, all games projected" if week == "next" else f"as of {result['as_of']}"
 st.caption(f"Week {result['week']['start']} to {result['week']['end']} · {when}"
-           f" · using {WINDOW_LABELS[window].lower()} stats")
+           f" · using {WINDOW_LABELS[window].lower()}"
+           + ("" if window in YAHOO_WINDOWS else " stats"))
 
 tab_matchup, tab_days, tab_whatif, tab_league, tab_players = st.tabs(
     ["Matchup", "Days", "What if", "Vs league", "Players"])
@@ -417,7 +444,8 @@ with tab_matchup:
     st.dataframe(styled_winner(table, [r["winner"] for r in result["categories"]], "Projected winner"),
                  hide_index=True, width="stretch")
     st.caption("Win chance: the rest of the week replayed 2,000 times, drawing each game from "
-               "the player's real games in the chosen window. 40–60% counts as a toss-up.")
+               "the player's real games in the chosen window (for Yahoo's projections: this season's "
+               "games, scaled to Yahoo's numbers). 40–60% counts as a toss-up.")
 
 with tab_days:
     n_slots = len(settings.starting_slots)
@@ -485,7 +513,7 @@ with tab_whatif:
         from_opp = [i for i in adds if i in opp_ids]
         new_opp = ([i for i in opp_ids if i not in from_opp] + list(drops)) if from_opp else opp_ids
         alt = run_projection(tuple(new_me), tuple(new_opp), preset, window, as_of, games_key,
-                             sat_key, CODE_VERSION)
+                             sat_key, CODE_VERSION, yahoo_teams)
         a_sum = alt["summary"]
         m1, m2, m3 = st.columns(3)
         m1.metric("Result", a_sum["text"].replace("Projected ", ""),
@@ -515,8 +543,8 @@ with tab_whatif:
         st.markdown("**Against a typical league**")
         horizon = st.radio("Over", list(HORIZONS), format_func=HORIZONS.get, horizontal=True,
                            key="wi_horizon")
-        b_now = run_benchmark(tuple(me_ids), preset, week_start, window, horizon, CODE_VERSION)
-        b_alt = run_benchmark(tuple(new_me), preset, week_start, window, horizon, CODE_VERSION)
+        b_now = run_benchmark(tuple(me_ids), preset, week_start, bench_window, horizon, CODE_VERSION)
+        b_alt = run_benchmark(tuple(new_me), preset, week_start, bench_window, horizon, CODE_VERSION)
         l1, l2, l3 = st.columns(3)
         l1.metric(f"Rank of {b_alt['league_size']}", f"~{b_alt['rank']:g}",
                   f"was ~{b_now['rank']:g}", delta_color="off")
@@ -540,10 +568,9 @@ with tab_league:
                               key="league_horizon")
     span = "this week" if league_horizon == "week" else "the rest of the season"
     st.caption("Your team against a typical 12-team league instead of just your opponent: "
-               "50 simulated drafts of the best players, every team projected the same way "
-               f"({WINDOW_LABELS[window].lower()} averages × games {span}, at most 10 a day). "
-               "Your real league comes in once Yahoo access is approved.")
-    bench_res = run_benchmark(tuple(me_ids), preset, week_start, window, league_horizon,
+               "100 simulated drafts of the best players, every team projected the same way "
+               f"({WINDOW_LABELS[bench_window].lower()} averages × games {span}, at most 10 a day).")
+    bench_res = run_benchmark(tuple(me_ids), preset, week_start, bench_window, league_horizon,
                               CODE_VERSION)
     b1, b2, b3 = st.columns(3)
     b1.metric(f"Rank of {bench_res['league_size']}", f"~{bench_res['rank']:g}",
@@ -603,7 +630,8 @@ with tab_players:
             "Plays (of left)": f"{p['games_assumed']} of {p['team_games_left']}",
             "Games to count": p["games_remaining"],
             "Sat (not counted)": p["games_benched"],
-            "Stats from": f"{WINDOW_LABELS.get(p['avg_source'], 'none')} ({p['avg_games']}g)",
+            "Stats from": ("Yahoo projection" if p["avg_source"] in YAHOO_WINDOWS else
+                           f"{WINDOW_LABELS.get(p['avg_source'], 'none')} ({p['avg_games']}g)"),
             **stat_cells(p),
         } for p in result["teams"][side]["players"]]), hide_index=True, width="stretch")
     st.caption("Sat = games on days when more than 10 of the team's players played; the ones "

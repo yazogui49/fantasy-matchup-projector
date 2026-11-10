@@ -15,6 +15,8 @@ TOSS_UP = (0.40, 0.60)  # win chance inside this band = toss-up
 # ESPN positions don't match Yahoo eligibility (e.g. Yahoo adds SG to some forwards),
 # so until Yahoo data is in, only the number of slots limits each day's starters.
 USE_POSITIONS = False
+# Windows that use Yahoo's per-game projections (given on each player as "projection").
+YAHOO_WINDOWS = {"yahoo7"}
 
 
 def _starters(candidates: list[dict], slots: list[str]) -> set[str]:
@@ -40,6 +42,22 @@ def _starters(candidates: list[dict], slots: list[str]) -> set[str]:
     return {p["id"] for p in holder.values()}
 
 
+def _averages(p: dict, window: str, stats_date: date) -> dict:
+    """Per-game stats for the window. Yahoo windows: Yahoo's projection, with this
+    season's real games scaled to match it, so the win chances keep each player's real
+    game-to-game swings. Players without one (not on a team in the league) use this season."""
+    if window not in YAHOO_WINDOWS:
+        return averages(p["id"], window, stats_date)
+    base = averages(p["id"], "season", stats_date)
+    if not p.get("projection"):
+        return base
+    # Yahoo doesn't project minutes or 3-point attempts: those stay as this season's.
+    per_game = {s: p["projection"].get(s, base["per_game"][s]) for s in STATS}
+    scale = {s: per_game[s] / base["per_game"][s] if base["per_game"][s] else 1.0 for s in STATS}
+    return {"source": window, "games": base["games"], "per_game": per_game,
+            "pool": [{s: g.get(s, 0.0) * scale[s] for s in STATS} for g in base["pool"]]}
+
+
 def _project_team(roster: list[dict], settings: LeagueSettings, window: str,
                   today: date, monday: date, sunday: date,
                   remaining: dict[str, list[str]], sat: dict[str, list[str]] | None = None,
@@ -60,7 +78,7 @@ def _project_team(roster: list[dict], settings: LeagueSettings, window: str,
             n = 0 if p.get("injury") == "Out" else len(team_games)
         players.append({
             **p,
-            "avg": averages(p["id"], window, stats_date),
+            "avg": _averages(p, window, stats_date),
             "played": {g["date"]: g["stats"] for g in played_by(game_log(p["id"]), today)
                        if g["date"] >= monday.isoformat()},
             "team_games_left": len(team_games),

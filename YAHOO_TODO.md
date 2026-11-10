@@ -8,6 +8,8 @@ players typed in.
 Done:
 - **Rosters load automatically**: paste a league link, pick your team, and your roster
   and that week's opponent load; switch between saved leagues at the top.
+- **Yahoo's 7-day projections** as a "Project using" option (per game = Yahoo's
+  next-7-days totals ÷ its projected games; the app's own schedule decides the games).
 
 Possible from the public pages, not built yet:
 1. **Real position eligibility**: team pages list Yahoo's positions (e.g. "LAC - PG,SG").
@@ -22,7 +24,8 @@ Possible from the public pages, not built yet:
 6. **Vs league with my real league**: every team's roster is public, so the "Vs league"
    tab can use the actual teams instead of simulated ones.
 7. **Free agents in What if**: only offer players not on any team in the league.
+8. **Yahoo's rest-of-season projections** (`projections(..., "rest")` already reads them)
+   for Vs league and What if over the rest of the season.
 
 Still needs the API (or a login):
 - Private leagues.
-- Yahoo's 7-day projections.
