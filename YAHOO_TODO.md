@@ -1,7 +1,8 @@
-# Waiting on Yahoo API access
+# Needs the Yahoo API
 
-Things set aside until Yahoo approves the app (applied 2026-10-30). Check access with
-`.venv/bin/python project.py --check-auth`.
+Things set aside for the Yahoo Fantasy API. **Access was denied on 2026-11-10**: Yahoo
+only approves developers in the USA and Canada. Kept here in case that changes.
+Check access with `.venv/bin/python project.py --check-auth`.
 
 1. **Rosters load automatically**: my team and this week's opponent, for both leagues,
    instead of typing them in.
