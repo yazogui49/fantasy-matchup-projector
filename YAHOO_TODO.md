@@ -1,22 +1,28 @@
-# Needs the Yahoo API
+# Yahoo data still to bring in
 
-Things set aside for the Yahoo Fantasy API. **Access was denied on 2026-11-10**: Yahoo
-only approves developers in the USA and Canada. Kept here in case that changes.
-Check access with `.venv/bin/python project.py --check-auth`.
+The Yahoo Fantasy API was **denied on 2026-11-10** (Yahoo only approves developers in the
+USA and Canada). Instead, the app reads **public leagues' web pages** with no login
+(`projector/yahoo_web.py`), the way ifsl.online does. Private leagues still need the
+players typed in.
 
-1. **Rosters load automatically**: my team and this week's opponent, for both leagues,
-   instead of typing them in.
-2. **League settings from Yahoo**: categories, starting slots, bench/IL, instead of the
-   `standard-9cat` preset.
-3. **Real position eligibility**: ESPN only has G/F/C and doesn't match Yahoo (e.g. Jaquez
-   is SG/SF/PF on Yahoo). Then turn `USE_POSITIONS` back on in `projector/projection.py`
-   so daily starters follow PG SG G G SF PF F F C C.
-4. **Who actually started each day**: past days currently assume the fewest-minutes
-   players sat when more than 10 played; users can set the bench for any day by hand
-   in the Days tab. Yahoo has the real daily lineups, so the manual fix can go.
-5. **Official matchup totals so far**: use Yahoo's live category totals instead of
-   rebuilding them from ESPN box scores.
-6. **Yahoo's 7-day projections**: add as a "Project using" option (if the API exposes them).
-7. **Vs league with my real league**: replace the simulated 12-team league in the
-   "Vs league" tab with the actual teams.
-8. **Free agents in What if**: only offer players who are actually available in my league.
+Done:
+- **Rosters load automatically**: paste a league link, pick your team, and your roster
+  and that week's opponent load; switch between saved leagues at the top.
+
+Possible from the public pages, not built yet:
+1. **Real position eligibility**: team pages list Yahoo's positions (e.g. "LAC - PG,SG").
+   Then turn `USE_POSITIONS` back on in `projector/projection.py` so daily starters follow
+   PG SG G G SF PF F F C C.
+2. **Who actually started each day**: `/{league}/{team}/team?date=YYYY-MM-DD` shows each
+   day's lineup slots (BN / IL = didn't count), replacing the manual bench editor.
+3. **IL slots**: players in IL slots don't count; start them at 0 games by default.
+4. **Official totals so far**: the matchup page has Yahoo's category totals for the week.
+5. **League settings**: categories and roster slots from the league's settings page,
+   instead of the `standard-9cat` preset.
+6. **Vs league with my real league**: every team's roster is public, so the "Vs league"
+   tab can use the actual teams instead of simulated ones.
+7. **Free agents in What if**: only offer players not on any team in the league.
+
+Still needs the API (or a login):
+- Private leagues.
+- Yahoo's 7-day projections.

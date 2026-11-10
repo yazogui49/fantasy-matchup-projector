@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import date, timedelta
 
 import pandas as pd
 import requests
 import streamlit as st
 
+from projector import yahoo_web
 from projector.benchmark import benchmark
 from projector.config import ROOT
 from projector.league import PRESETS
@@ -63,6 +65,21 @@ def run_projection(me: tuple[str, ...], opp: tuple[str, ...], preset: str, windo
                            today=as_of, sat=sat_by_side)
 
 
+@st.cache_data(ttl=1800, show_spinner="Reading the Yahoo league…")
+def yahoo_league(lid: str) -> dict:
+    return yahoo_web.league(lid)
+
+
+@st.cache_data(ttl=1800, show_spinner="Loading rosters from Yahoo…")
+def yahoo_matchup(lid: str, tid: str, week: int | None) -> dict:
+    """Both rosters as ESPN ids, plus the opponent's team id and anyone not found."""
+    directory = players_by_id()
+    opp = yahoo_web.opponent(lid, tid, week) if week else None
+    me, missing = yahoo_web.match(yahoo_web.roster(lid, tid), directory)
+    them, missing_opp = yahoo_web.match(yahoo_web.roster(lid, opp), directory) if opp else ([], [])
+    return {"me": me, "opponent": them, "opponent_team": opp, "missing": missing + missing_opp}
+
+
 HORIZONS = {"season": "Rest of season", "week": "This week"}
 
 
@@ -114,14 +131,17 @@ def decode_sat(text: str) -> dict[str, dict[str, list[str]]]:
 
 def load_saved() -> dict:
     q = st.query_params
+    # Yahoo leagues as "league.team", e.g. y=3170.11,210575.9 and l = the one shown.
+    leagues = [k for k in q.get("y", "").split(",") if re.fullmatch(r"\d+\.\d+", k)]
+    yahoo = {"leagues": leagues, "league": q.get("l") if q.get("l") in leagues else ""}
     if "me" in q or "opp" in q:
         return {"me": q.get("me", "").split(","), "opponent": q.get("opp", "").split(","),
                 "window": q.get("w", "season"), "games": decode_games(q.get("g", "")),
-                "sat": decode_sat(q.get("s", ""))}
+                "sat": decode_sat(q.get("s", "")), **yahoo}
     try:  # one-time carry-over of rosters saved by earlier local versions
-        return json.loads(LEGACY_ROSTERS_FILE.read_text())
+        return {**json.loads(LEGACY_ROSTERS_FILE.read_text()), **yahoo}
     except (FileNotFoundError, json.JSONDecodeError):
-        return {}
+        return yahoo
 
 
 def save(state: dict) -> None:
@@ -130,7 +150,8 @@ def save(state: dict) -> None:
     sat = {side: {d: ids for d, ids in days.items() if d >= this_monday}
            for side, days in st.session_state.get("sat", {}).items()}
     params = {"me": ",".join(state["me"]), "opp": ",".join(state["opponent"]),
-              "w": state["window"], "g": encode_games(games), "s": encode_sat(sat)}
+              "w": state["window"], "g": encode_games(games), "s": encode_sat(sat),
+              "y": ",".join(st.session_state["leagues"]), "l": st.session_state["league"]}
     params = {k: v for k, v in params.items() if v}
     if dict(st.query_params) != params:
         st.query_params.from_dict(params)
@@ -162,6 +183,9 @@ if "games" not in st.session_state:
     st.session_state["games"] = saved.get("games", {})
 if "sat" not in st.session_state:
     st.session_state["sat"] = saved.get("sat", {})
+for key in ("leagues", "league"):
+    if key not in st.session_state:
+        st.session_state[key] = saved[key]
 
 with st.sidebar:
     st.header("Settings")
@@ -182,11 +206,96 @@ st.title("🏀 Matchup Projector")
 settings = PRESETS[preset]
 roster_size = len(settings.starting_slots) + settings.bench + settings.il
 
+
+
+def league_label(key: str) -> str:
+    if not key:
+        return "No Yahoo league (type players in)"
+    lid, tid = key.split(".")
+    try:
+        info = yahoo_league(lid)
+    except yahoo_web.YahooError:
+        return f"League {lid} · team {tid}"
+    return f"{info['name']} · {info['teams'].get(tid, f'team {tid}')}"
+
+
+def add_league(lid: str, tid: str) -> None:
+    key = f"{lid}.{tid}"
+    if key not in st.session_state["leagues"]:
+        st.session_state["leagues"].append(key)
+    st.session_state["league"] = key
+    st.session_state["yahoo_link"] = ""
+
+
+def remove_league() -> None:
+    st.session_state["leagues"].remove(st.session_state["league"])
+    st.session_state["league"] = next(iter(st.session_state["leagues"]), "")
+
+
+def reload_yahoo() -> None:
+    yahoo_league.clear()
+    yahoo_matchup.clear()
+    st.session_state.pop("loaded_for", None)
+
+
+# Yahoo leagues: each person adds their own (saved in their URL) and switches between them.
+leagues = st.session_state["leagues"]
+if leagues:
+    c1, c2 = st.columns([4, 1], vertical_alignment="bottom")
+    c1.selectbox("League", leagues + [""], key="league", format_func=league_label)
+    c2.button("Reload from Yahoo", on_click=reload_yahoo, width="stretch")
+with st.expander("Add a Yahoo league" if leagues else "Load your team from Yahoo",
+                 expanded=not leagues):
+    st.caption("Paste your league's (or your team's) link from Yahoo Fantasy Basketball. Your "
+               "roster and this week's opponent then load by themselves. Works for leagues "
+               "set to publicly viewable; for others, type the players in below.")
+    link = st.text_input("League link", key="yahoo_link",
+                         placeholder="https://basketball.fantasysports.yahoo.com/nba/3170/11")
+    if link:
+        try:
+            lid, tid = yahoo_web.parse_link(link)
+            info = yahoo_league(lid)
+        except yahoo_web.YahooError as e:
+            st.error(str(e))
+        else:
+            teams = list(info["teams"])
+            team = st.selectbox(f"Your team in {info['name']}", teams, key=f"yahoo_team_{lid}",
+                                index=teams.index(tid) if tid in teams else None,
+                                format_func=info["teams"].get, placeholder="Pick your team")
+            st.button("Add league", type="primary", on_click=add_league, args=(lid, team),
+                      disabled=team is None)
+    if st.session_state["league"]:
+        st.button("Remove this league", on_click=remove_league)
+
+titles = {"me": "My team", "opponent": "Opponent"}
+if st.session_state["league"]:
+    lid, tid = st.session_state["league"].split(".")
+    try:
+        info = yahoo_league(lid)
+        yahoo_week = info["week"] and info["week"] + (week == "next")
+        loaded = yahoo_matchup(lid, tid, yahoo_week)
+    except yahoo_web.YahooError as e:
+        st.error(f"{e} Showing the rosters as they were.")
+    else:
+        # Fill the pickers when the league or week changes (or after Reload); edits made
+        # by hand stay until then.
+        if st.session_state.get("loaded_for") != (lid, tid, yahoo_week):
+            st.session_state["me"], st.session_state["opponent"] = loaded["me"], loaded["opponent"]
+            st.session_state["loaded_for"] = (lid, tid, yahoo_week)
+        titles["me"] += f" · {info['teams'].get(tid, '')}"
+        if loaded["opponent_team"]:
+            titles["opponent"] += f" · {info['teams'].get(loaded['opponent_team'], '')}"
+        else:
+            st.info(f"No opponent on Yahoo for week {yahoo_week}. Type one in below.")
+        if loaded["missing"]:
+            st.warning(f"Not found on ESPN, so left out: {', '.join(loaded['missing'])}")
+
 left, right = st.columns(2)
-for col, key, title in ((left, "me", "My team"), (right, "opponent", "Opponent")):
+for col, key in ((left, "me"), (right, "opponent")):
     with col:
-        st.multiselect(title, list(directory), key=key, format_func=label,
-                       max_selections=roster_size, placeholder="Type a name…")
+        st.multiselect(titles[key], list(directory), key=key, format_func=label,
+                       max_selections=max(roster_size, len(st.session_state[key])),
+                       placeholder="Type a name…")
         # The chips get cut off when the box is narrow (phones), so list everyone here too.
         if st.session_state[key]:
             with st.expander(f"Show all {len(st.session_state[key])} players"):
