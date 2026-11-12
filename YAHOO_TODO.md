@@ -13,20 +13,24 @@ Done:
   decide which games count.
 - **Vs league with my real league**: the "Vs league" tab and What if compare against the
   league's actual teams (their current Yahoo rosters), with projected standings. With
-  Yahoo projections on, every team uses Yahoo's rest-of-season (or next-7-days) numbers.
+  Yahoo projections on, every team uses Yahoo's rest-of-season numbers, or for "This
+  week" each remaining day's own projection.
+- **Real positions**: with a Yahoo league, players get Yahoo's eligibility and daily
+  starters fill PG SG G G SF PF F F C C (`use_positions` in `projector/projection.py`).
+- **Who actually started each day**: days played so far (and today) use Yahoo's real
+  lineups; anyone not in an active slot sat (bench, IL, or not on the team yet). Any day
+  can still be changed by hand.
+- **IL slots**: players in IL slots start at 0 games this week (and don't count in the
+  league comparison's week).
 
 Possible from the public pages, not built yet:
-1. **Real position eligibility**: team pages list Yahoo's positions (e.g. "LAC - PG,SG").
-   Then turn `USE_POSITIONS` back on in `projector/projection.py` so daily starters follow
-   PG SG G G SF PF F F C C.
-2. **Who actually started each day**: `/{league}/{team}/team?date=YYYY-MM-DD` shows each
-   day's lineup slots (BN / IL = didn't count), replacing the manual bench editor.
-3. **IL slots**: players in IL slots don't count; start them at 0 games by default.
-4. **Official totals so far**: the matchup page has Yahoo's category totals for the week.
-5. **League settings**: categories and roster slots from the league's settings page,
+1. **Official totals so far**: the matchup page has Yahoo's category totals for the week.
+   This also counts players who've left the team since (e.g. dropped or traded mid-week),
+   whose games the app currently misses because it only knows today's roster.
+2. **League settings**: categories and roster slots from the league's settings page,
    instead of the `standard-9cat` preset.
-6. **Free agents in What if**: only offer players not on any team in the league.
-7. **Real schedule in Vs league standings**: the standings play everyone once; the
+3. **Free agents in What if**: only offer players not on any team in the league.
+4. **Real schedule in Vs league standings**: the standings play everyone once; the
    league's actual remaining matchups are on Yahoo's schedule page.
 
 Still needs the API (or a login):

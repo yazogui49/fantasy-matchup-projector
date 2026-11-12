@@ -71,17 +71,19 @@ def _values(pool: list[dict], settings: LeagueSettings) -> np.ndarray:
 
 
 def _week_totals(players: list[dict], schedule: dict[str, list[str]], slots: int) -> dict[str, float]:
-    """A roster's week: each day, up to `slots` players with a game count (most minutes first)."""
+    """A roster's week: each day, up to `slots` players with a game count (most minutes
+    first). A player's "by_day" (date -> stats), when given, replaces his averages that day."""
     by_day: dict[str, list[dict]] = {}
     for p in players:
         for d in schedule.get(p["team"], []):
             by_day.setdefault(d, []).append(p)
     totals = dict.fromkeys(STATS, 0.0)
-    for playing in by_day.values():
+    for d, playing in by_day.items():
         playing.sort(key=lambda p: p["per_game"].get("min", 0), reverse=True)
         for p in playing[:slots]:
+            day_stats = p.get("by_day", {}).get(d, {})
             for s in STATS:
-                totals[s] += p["per_game"].get(s, 0)
+                totals[s] += day_stats.get(s, p["per_game"].get(s, 0))
     totals["games"] = sum(min(len(v), slots) for v in by_day.values())
     return totals
 
@@ -213,19 +215,24 @@ def player_averages(ids: list[str], window: str, today: date) -> dict[str, dict]
 
 def real_league(roster: list[dict], teams: dict[str, dict], my_team: str,
                 directory: dict[str, dict], settings: LeagueSettings, day: date,
-                per_game: dict[str, dict], horizon: str = "week") -> dict:
+                per_game: dict[str, dict], horizon: str = "week",
+                by_day: dict[str, dict] | None = None, il: set[str] = frozenset()) -> dict:
     """Compare `roster` with a real league's other teams. `teams`: team id ->
     {'name', 'ids'}; `my_team` is the one `roster` stands in for (so trades and pickups
-    can be tried). `per_game`: player id -> per-game stats. Every team is projected the
-    same way as in `benchmark`; the result has the same keys, plus 'teams' (standings)."""
+    can be tried). `per_game`: player id -> per-game stats; `by_day`: player id ->
+    {date: stats} for days with their own projection. `il`: players in IL slots, who
+    (like Out players) don't count this week. Every team is projected the same way as
+    in `benchmark`; the result has the same keys, plus 'teams' (standings)."""
+    by_day = by_day or {}
     schedule = week_games(day) if horizon == "week" else season_games()
     slots = len(settings.starting_slots)
     skip_out = horizon == "week"  # as in benchmark: Out players only miss this week
 
     def players(ids: list[str]) -> list[dict]:
-        return [{"id": pid, "team": directory[pid]["team"], "per_game": per_game.get(pid, {})}
+        return [{"id": pid, "team": directory[pid]["team"], "per_game": per_game.get(pid, {}),
+                 "by_day": by_day.get(pid, {})}
                 for pid in ids if pid in directory
-                and not (skip_out and directory[pid]["injury"] == "Out")]
+                and not (skip_out and (directory[pid]["injury"] == "Out" or pid in il))]
 
     # A trade: players on `roster` leave the team they're on, and the team that gave the
     # most gets the players from my Yahoo team that `roster` no longer has.

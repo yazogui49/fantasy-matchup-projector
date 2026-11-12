@@ -62,26 +62,37 @@ def team_games_left(as_of: date | None) -> dict[str, int]:
 def run_projection(me: tuple[str, ...], opp: tuple[str, ...], preset: str, window: str,
                    as_of: date | None, games: tuple[tuple[str, int], ...],
                    sat: tuple[tuple[str, str, tuple[str, ...]], ...], code: str,
-                   yahoo: tuple[str, ...] = ()) -> dict:
-    """`yahoo`: (league id, team ids...) to read Yahoo's projections from."""
+                   yahoo: tuple = ()) -> dict:
+    """`yahoo`: (league id, my team id, Yahoo week) when the rosters come from Yahoo:
+    then players get Yahoo's positions and IL slots, and Yahoo projections can be used."""
     directory = players_by_id()
     overrides = dict(games)
-    projected = {}
-    if yahoo and window in YAHOO_WINDOWS:
-        today = as_of or nba_today()
-        sunday = fantasy_week(today)[1]
-        days = tuple((today + timedelta(days=i)).isoformat() for i in range((sunday - today).days + 1))
-        projected = yahoo_projections(yahoo[0], yahoo[1:], days)
+    projected, positions, il = {}, {}, set()
+    if yahoo:
+        lid, tid, yahoo_week = yahoo
+        loaded = yahoo_matchup(lid, tid, yahoo_week)
+        positions, il = loaded["positions"], set(loaded["il"])
+        if window in YAHOO_WINDOWS:
+            teams = (tid,) + ((loaded["opponent_team"],) if loaded["opponent_team"] else ())
+            projected = yahoo_projections(lid, teams, days_left(as_of))
 
     def roster(ids):
-        return [{**directory[i], "games_override": overrides.get(i), "projection": projected.get(i)}
-                for i in ids]
+        return [{**directory[i], "positions": positions.get(i, directory[i]["positions"]),
+                 "on_il": i in il, "games_override": overrides.get(i),
+                 "projection": projected.get(i)} for i in ids]
 
     sat_by_side: dict[str, dict[str, list[str]]] = {}
     for side, day, ids in sat:
         sat_by_side.setdefault(side, {})[day] = list(ids)
     return project_matchup(roster(me), roster(opp), PRESETS[preset], window=window,
-                           today=as_of, sat=sat_by_side)
+                           today=as_of, sat=sat_by_side, use_positions=bool(yahoo))
+
+
+def days_left(as_of: date | None) -> tuple[str, ...]:
+    """Dates from today (or `as_of`) through that fantasy week's Sunday."""
+    today = as_of or nba_today()
+    sunday = fantasy_week(today)[1]
+    return tuple((today + timedelta(days=i)).isoformat() for i in range((sunday - today).days + 1))
 
 
 @st.cache_data(ttl=1800, show_spinner="Reading the Yahoo league…")
@@ -89,41 +100,72 @@ def yahoo_league(lid: str) -> dict:
     return yahoo_web.league(lid)
 
 
+@st.cache_data(ttl=1800, show_spinner=False)
+def yahoo_day(lid: str, tid: str, day: str) -> dict[str, dict]:
+    """ESPN id -> Yahoo's projected stats for his game on `day` (one Yahoo page, shared
+    by the matchup and the league comparison)."""
+    directory = players_by_id()
+    players = yahoo_web.day_projections(lid, tid, day)
+    return {pid: p["per_game"] for pid, p in zip(yahoo_web.find(players, directory), players) if pid}
+
+
 @st.cache_data(ttl=1800, show_spinner="Loading Yahoo's projections…")
 def yahoo_projections(lid: str, teams: tuple[str, ...], days: tuple[str, ...]) -> dict[str, dict]:
     """ESPN id -> {date: Yahoo's projected stats for that day's game}, for these teams'
     players over the given days (one Yahoo page per team per day)."""
-    directory = players_by_id()
     projected: dict[str, dict] = {}
     for tid in teams:
         for day in days:
-            players = yahoo_web.day_projections(lid, tid, day)
-            for pid, p in zip(yahoo_web.find(players, directory), players):
-                if pid:
-                    projected.setdefault(pid, {})[day] = p["per_game"]
+            for pid, stats in yahoo_day(lid, tid, day).items():
+                projected.setdefault(pid, {})[day] = stats
     return projected
+
+
+@st.cache_data(ttl=1800, show_spinner="Reading Yahoo's daily lineups…")
+def yahoo_active(lid: str, tid: str, days: tuple[str, ...]) -> dict[str, list[str]]:
+    """Date -> ESPN ids of the players in the team's active lineup slots that day, from
+    its real Yahoo lineup. Everyone else sat: benched, on IL, or not on the team yet."""
+    directory = players_by_id()
+    active = {}
+    for day in days:
+        players = yahoo_web.roster(lid, tid, day)
+        active[day] = [pid for pid, p in zip(yahoo_web.find(players, directory), players)
+                       if pid and p["slot"] not in yahoo_web.BENCH_SLOTS]
+    return active
 
 
 @st.cache_data(ttl=1800, show_spinner="Loading rosters from Yahoo…")
 def yahoo_matchup(lid: str, tid: str, week: int | None) -> dict:
-    """Both rosters as ESPN ids, plus the opponent's team id and anyone not found."""
+    """Both rosters as ESPN ids, the opponent's team id, anyone not found, and from
+    Yahoo: each player's positions, and who's in an IL slot."""
     directory = players_by_id()
     opp = yahoo_web.opponent(lid, tid, week) if week else None
-    me, missing = yahoo_web.match(yahoo_web.roster(lid, tid), directory)
-    them, missing_opp = yahoo_web.match(yahoo_web.roster(lid, opp), directory) if opp else ([], [])
-    return {"me": me, "opponent": them, "opponent_team": opp, "missing": missing + missing_opp}
+    out = {"opponent_team": opp, "missing": [], "positions": {}, "il": []}
+    for side, team in (("me", tid), ("opponent", opp)):
+        players = yahoo_web.roster(lid, team) if team else []
+        ids = yahoo_web.find(players, directory)
+        out[side] = [i for i in ids if i]
+        for pid, p in zip(ids, players):
+            if not pid:
+                out["missing"].append(p["name"])
+                continue
+            out["positions"][pid] = p["positions"]
+            if p["slot"] in yahoo_web.IL_SLOTS:
+                out["il"].append(pid)
+    return out
 
 
 @st.cache_data(ttl=1800, show_spinner="Reading every team in your Yahoo league…")
 def yahoo_league_teams(lid: str, period: str) -> dict[str, dict]:
-    """Team id -> {'name', 'ids', 'projected': {id: Yahoo's per-game projection}}, for
-    every team in the league (one Yahoo page each)."""
+    """Team id -> {'name', 'ids', 'il', 'projected': {id: Yahoo's per-game projection}},
+    for every team in the league (one Yahoo page each)."""
     directory = players_by_id()
     teams = {}
     for tid, name in yahoo_league(lid)["teams"].items():
         players = yahoo_web.projections(lid, tid, period)
         ids = yahoo_web.find(players, directory)
         teams[tid] = {"name": name, "ids": [i for i in ids if i],
+                      "il": [i for i, p in zip(ids, players) if i and p["slot"] in yahoo_web.IL_SLOTS],
                       "projected": {i: p["per_game"] for i, p in zip(ids, players)
                                     if i and p["per_game"]}}
     return teams
@@ -134,19 +176,24 @@ def run_real_league(me: tuple[str, ...], preset: str, week_start: str, window: s
                     horizon: str, lid: str, tid: str, code: str) -> dict:
     """`me` against the other teams of Yahoo league `lid`, standing in for team `tid`."""
     directory = players_by_id()
-    # Yahoo projects the next 7 days or the rest of the season, not a Monday-Sunday week.
-    teams = yahoo_league_teams(lid, "rest" if horizon == "season" else "next7")
+    teams = yahoo_league_teams(lid, "rest")
     yahoo = window in YAHOO_WINDOWS
     ids = list(dict.fromkeys(list(me) + [i for t in teams.values() for i in t["ids"]]))
     per_game = player_averages(ids, "season" if yahoo else window, nba_today())
+    by_day = {}
     if yahoo:  # Yahoo has no minutes or 3-point attempts: those stay as this season's
         for t in teams.values():
             for pid, projected in t["projected"].items():
                 per_game[pid] = {**per_game.get(pid, {}), **projected}
+        if horizon == "week":
+            # Each remaining day's own projection, as in the matchup: Yahoo's 7-day
+            # numbers would run past Sunday.
+            monday = date.fromisoformat(week_start)
+            by_day = yahoo_projections(lid, tuple(teams), days_left(max(monday, nba_today())))
     return real_league([directory[i] for i in me],
                        {k: {"name": t["name"], "ids": t["ids"]} for k, t in teams.items()},
                        tid, directory, PRESETS[preset], date.fromisoformat(week_start),
-                       per_game, horizon)
+                       per_game, horizon, by_day, {i for t in teams.values() for i in t["il"]})
 
 
 HORIZONS = {"season": "Rest of season", "week": "This week"}
@@ -363,7 +410,9 @@ with st.expander("Add a Yahoo league" if leagues else "Load your team from Yahoo
                       disabled=team is None)
 
 titles = {"me": "My team", "opponent": "Opponent"}
-yahoo_teams: tuple[str, ...] = ()  # (league, my team, opponent) for Yahoo's projections
+yahoo_ctx: tuple = ()  # (league, my team, Yahoo week) when the rosters come from Yahoo
+yahoo_il: set[str] = set()
+yahoo_sat: dict[str, dict[str, list[str]]] = {}  # side -> date -> benched, from Yahoo lineups
 league_name = ""
 if st.session_state["league"]:
     lid, tid = st.session_state["league"].split(".")
@@ -379,7 +428,21 @@ if st.session_state["league"]:
         if st.session_state.get("loaded_for") != (lid, tid, yahoo_week):
             st.session_state["me"], st.session_state["opponent"] = loaded["me"], loaded["opponent"]
             st.session_state["loaded_for"] = (lid, tid, yahoo_week)
-        yahoo_teams = (lid, tid) + ((loaded["opponent_team"],) if loaded["opponent_team"] else ())
+        yahoo_ctx = (lid, tid, yahoo_week)
+        yahoo_il = set(loaded["il"])
+        if week == "this":
+            # Who really sat on the days played so far (and today's lineup).
+            monday = fantasy_week(as_of or nba_today())[0]
+            played_days = tuple((monday + timedelta(days=i)).isoformat()
+                                for i in range(((as_of or nba_today()) - monday).days + 1))
+            try:
+                for side, team in (("me", tid), ("opponent", loaded["opponent_team"])):
+                    if team:
+                        active = yahoo_active(lid, team, played_days)
+                        yahoo_sat[side] = {d: [i for i in st.session_state[side] if i not in ids]
+                                           for d, ids in active.items()}
+            except yahoo_web.YahooError as e:
+                st.warning(f"Couldn't read Yahoo's daily lineups, so the app guesses who sat. ({e})")
         league_name = info["name"]
         titles["me"] += f" · {info['teams'].get(tid, '')}"
         if loaded["opponent_team"]:
@@ -414,9 +477,10 @@ for side, ids in (("Me", me_ids), ("Opponent", opp_ids)):
     for pid in ids:
         p = directory[pid]
         available = left_by_team.get(p["team"], 0)
-        default = 0 if p["injury"] == "Out" else available
+        default = 0 if p["injury"] == "Out" or pid in yahoo_il else available
+        status = ", ".join(filter(None, [p["injury"], "IL slot" if pid in yahoo_il else None]))
         rows.append({"id": pid, "Team": side, "Player": p["name"], "NBA": p["team"],
-                     "Status": p["injury"] or "", "Games left": available,
+                     "Status": status, "Games left": available,
                      "Plays": min(week_games.get(pid, default), available), "_default": default})
 games_df = pd.DataFrame(rows)
 
@@ -448,10 +512,13 @@ for col, side in ((left, "Me"), (right, "Opponent")):
 save({"me": me_ids, "opponent": opp_ids, "window": window, "games": st.session_state["games"]})
 
 games_key = tuple(sorted(week_games.items()))
-sat_key = tuple((side, d, tuple(ids)) for side, days in sorted(st.session_state["sat"].items())
+# Who sat each day: Yahoo's real lineups, overridden by any day the user set.
+sat = {side: {**yahoo_sat.get(side, {}), **st.session_state["sat"].get(side, {})}
+       for side in ("me", "opponent")}
+sat_key = tuple((side, d, tuple(ids)) for side, days in sorted(sat.items())
                 for d, ids in sorted(days.items()))
 result = run_projection(tuple(me_ids), tuple(opp_ids), preset, window, as_of, games_key, sat_key,
-                        CODE_VERSION, yahoo_teams)
+                        CODE_VERSION, yahoo_ctx)
 summary = result["summary"]
 WINNER_TEXT = {"me": "Me", "opponent": "Opponent", "toss-up": "Toss-up"}
 # Yahoo only projects the players on this league's teams, so league comparisons (which
@@ -463,10 +530,10 @@ HORIZON_SPANS = {"week": "this week", "season": "for the rest of the season"}
 def vs_league(roster_ids: list[str], horizon: str) -> tuple[dict, bool]:
     """(result, is it the real league?): the loaded Yahoo league's real teams, or a
     simulated league when there's none (or Yahoo can't be read)."""
-    if yahoo_teams:
+    if yahoo_ctx:
         try:
             return run_real_league(tuple(roster_ids), preset, week_start, window, horizon,
-                                   yahoo_teams[0], yahoo_teams[1], CODE_VERSION), True
+                                   yahoo_ctx[0], yahoo_ctx[1], CODE_VERSION), True
         except yahoo_web.YahooError as e:
             st.warning(f"Couldn't read your league from Yahoo, so this uses a simulated one. ({e})")
     return run_benchmark(tuple(roster_ids), preset, week_start, bench_window, horizon,
@@ -552,9 +619,11 @@ with tab_matchup:
 with tab_days:
     n_slots = len(settings.starting_slots)
     st.caption(f"**Had a game** = his team played. **Playing** = actually played (past days) or "
-               f"expected to (Out players and Plays overrides excluded). **Counted** = at most "
-               f"{n_slots} a day; the rest sit (pick who sits under each table). **Open** = unused "
-               "slots, where a pickup adds games.")
+               f"expected to (Out players, IL slots and Plays overrides excluded). **Counted** = at "
+               f"most {n_slots} a day"
+               + (", filling the slots by Yahoo positions (PG SG G G SF PF F F C C)" if yahoo_ctx else "")
+               + "; the rest sit (pick who sits under each table). **Open** = unused slots, "
+               "where a pickup adds games.")
 
     def remember_sat(side: str, day: str, key: str) -> None:
         st.session_state["sat"].setdefault(side, {})[day] = st.session_state[key]
@@ -571,28 +640,32 @@ with tab_days:
             lambda col: ["background-color: rgba(26,127,55,.15)" if v > 0 else "" for v in col],
             subset=["Open"]), hide_index=True, width="stretch")
 
-        # Who sits, any day: the app's guess (fewest minutes, only when more than 10
-        # play) until the user sets the day, then exactly what they picked.
+        # Who sits, any day: what the user set, else Yahoo's real lineup (days played so
+        # far), else the app's guess (fewest minutes, only when more than 10 play).
         game_days = [d for d in daily if d["scheduled"]]
         if game_days:
             with st.expander(f"Choose who sits each day ({title.lower()})"):
                 st.caption("Benched players' stats don't count, even if they played. Days you "
-                           "haven't touched use the app's guess.")
+                           "haven't touched use Yahoo's lineup (days already played, with a "
+                           "Yahoo league) or the app's guess.")
                 for d in game_days:
                     key = f"sat_{side}_{d['date']}"
                     chosen = st.session_state["sat"].get(side, {}).get(d["date"])
-                    st.session_state[key] = ([i for i in chosen if i in d["scheduled_ids"]]
-                                             if chosen is not None else d["benched_ids"])
+                    from_yahoo = yahoo_sat.get(side, {}).get(d["date"])
+                    source = ("set by you" if chosen is not None else
+                              "Yahoo lineup" if from_yahoo is not None else "app's guess")
+                    if chosen is None:
+                        chosen = from_yahoo if from_yahoo is not None else d["benched_ids"]
+                    st.session_state[key] = [i for i in chosen if i in d["scheduled_ids"]]
                     st.multiselect(
                         f"{date.fromisoformat(d['date']).strftime('%a %b %-d')} · "
-                        f"{d['scheduled']} had a game · "
-                        + ("set by you" if d["user_set"] else "app's guess"),
+                        f"{d['scheduled']} had a game · {source}",
                         d["scheduled_ids"], key=key, format_func=lambda i: directory[i]["name"],
                         placeholder="Nobody sits",
                         on_change=remember_sat, args=(side, d["date"], key))
     st.caption("✓ = already played.")
     if any(st.session_state["sat"].values()):  # any day set by the user
-        if st.button("Back to the app's guesses of who sits"):
+        if st.button("Undo my changes to who sits"):
             st.session_state["sat"] = {}
             st.rerun()
 
@@ -615,7 +688,7 @@ with tab_whatif:
         from_opp = [i for i in adds if i in opp_ids]
         new_opp = ([i for i in opp_ids if i not in from_opp] + list(drops)) if from_opp else opp_ids
         alt = run_projection(tuple(new_me), tuple(new_opp), preset, window, as_of, games_key,
-                             sat_key, CODE_VERSION, yahoo_teams)
+                             sat_key, CODE_VERSION, yahoo_ctx)
         a_sum = alt["summary"]
         m1, m2, m3 = st.columns(3)
         m1.metric("Result", a_sum["text"].replace("Projected ", ""),

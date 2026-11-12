@@ -12,19 +12,18 @@ from .stats import STATS, averages, game_log, played_by
 
 SIMULATIONS = 2000
 TOSS_UP = (0.40, 0.60)  # win chance inside this band = toss-up
-# ESPN positions don't match Yahoo eligibility (e.g. Yahoo adds SG to some forwards),
-# so until Yahoo data is in, only the number of slots limits each day's starters.
-USE_POSITIONS = False
 # Windows that use Yahoo's projections, given on each player as "projection":
 # date -> projected stats for that day's game.
 YAHOO_WINDOWS = {"yahoo"}
 
 
-def _starters(candidates: list[dict], slots: list[str]) -> set[str]:
+def _starters(candidates: list[dict], slots: list[str], use_positions: bool) -> set[str]:
     """Ids of the candidates who get a starting slot. Candidates come in priority
     order; each is placed if any slot assignment fits them (bipartite matching),
-    so a lower-priority player only starts when a higher one can't use the slot."""
-    if not USE_POSITIONS:
+    so a lower-priority player only starts when a higher one can't use the slot.
+    Without positions (ESPN's G/F/C don't match Yahoo's eligibility), only the number
+    of slots counts."""
+    if not use_positions:
         return {p["id"] for p in candidates[:len(slots)]}
     holder: dict[int, dict] = {}
 
@@ -69,10 +68,12 @@ def _sim_pool(p: dict) -> list[dict]:
 def _project_team(roster: list[dict], settings: LeagueSettings, window: str,
                   today: date, monday: date, sunday: date,
                   remaining: dict[str, list[str]], sat: dict[str, list[str]] | None = None,
-                  schedule: dict[str, list[str]] | None = None) -> dict:
-    """`sat`: date -> the exact ids benched that day, as set by the user; benched
-    players never count. Days not in `sat`: if more play than there are slots, the
-    ones with the fewest minutes sit."""
+                  schedule: dict[str, list[str]] | None = None,
+                  use_positions: bool = False) -> dict:
+    """`sat`: date -> the exact ids benched that day (by the user, or Yahoo's lineup);
+    benched players never count. Days not in `sat`: if more play than there are slots,
+    the ones with the fewest minutes sit. Players with "on_il" (in an IL slot) play no
+    games unless overridden, like Out players."""
     sat = sat or {}
     # A future `today` (projecting next week) still averages the games played up to now.
     stats_date = min(today, nba_today())
@@ -83,7 +84,7 @@ def _project_team(roster: list[dict], settings: LeagueSettings, window: str,
         # than all, assume the last ones (the usual case: returning from injury).
         n = p.get("games_override")
         if n is None:
-            n = 0 if p.get("injury") == "Out" else len(team_games)
+            n = 0 if p.get("injury") == "Out" or p.get("on_il") else len(team_games)
         players.append({
             **p,
             "avg": _averages(p, window, stats_date),
@@ -104,7 +105,8 @@ def _project_team(roster: list[dict], settings: LeagueSettings, window: str,
         d = day.isoformat()
         playing = [p for p in priority if d in p["played"] or d in p["upcoming"]]
         benched = set(sat.get(d, []))
-        starting = _starters([p for p in playing if p["id"] not in benched], settings.starting_slots)
+        starting = _starters([p for p in playing if p["id"] not in benched],
+                             settings.starting_slots, use_positions)
         for p in playing:
             if p["id"] not in starting:
                 p["games_benched"] += 1
@@ -205,15 +207,17 @@ def compare(settings: LeagueSettings, mine: dict, theirs: dict,
 
 def project_matchup(me: list[dict], opponent: list[dict], settings: LeagueSettings,
                     window: str = "season", today: date | None = None,
-                    sat: dict[str, dict[str, list[str]]] | None = None) -> dict:
-    """Full projection as a JSON-serializable dict; every view renders from this."""
+                    sat: dict[str, dict[str, list[str]]] | None = None,
+                    use_positions: bool = False) -> dict:
+    """Full projection as a JSON-serializable dict; every view renders from this.
+    `use_positions`: fill daily slots by position (when positions are Yahoo's)."""
     today = today or nba_today()
     monday, sunday = fantasy_week(today)
     remaining = remaining_games(today)
     schedule = week_games(today)
     sat = sat or {}
     teams = {side: _project_team(roster, settings, window, today, monday, sunday, remaining,
-                                 sat.get(side), schedule)
+                                 sat.get(side), schedule, use_positions)
              for side, roster in (("me", me), ("opponent", opponent))}
     rng = np.random.default_rng(0)  # fixed seed: same inputs give the same chances
     sims = (simulate(teams["me"], rng), simulate(teams["opponent"], rng))

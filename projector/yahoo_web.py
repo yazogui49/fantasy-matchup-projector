@@ -126,11 +126,18 @@ def _player_rows(page: str) -> list[dict]:
     return rows
 
 
-def roster(lid: str, tid: str) -> list[dict]:
-    """Today's roster: [{'name', 'team' (ESPN code), 'positions', 'slot'}].
-    `slot` is the lineup spot (PG ... C, BN, IL); `positions` is Yahoo's eligibility."""
+# Lineup spots whose stats don't count.
+BENCH_SLOTS = {"BN", "IL", "IL+", "NA"}
+IL_SLOTS = {"IL", "IL+"}
+
+
+def roster(lid: str, tid: str, day: str | None = None) -> list[dict]:
+    """The roster today, or on `day` (YYYY-MM-DD): [{'name', 'team' (ESPN code),
+    'positions', 'slot'}]. `slot` is the lineup spot that day (PG ... C, or BN / IL);
+    `positions` is Yahoo's eligibility."""
+    path = f"{lid}/{tid}" + (f"/team?date={day}" if day else "")
     return [{k: r[k] for k in ("name", "team", "positions", "slot")}
-            for r in _player_rows(_page(f"{lid}/{tid}"))]
+            for r in _player_rows(_page(path))]
 
 
 # Yahoo projection column -> our stat key; "made/attempted" columns hold two.
@@ -147,14 +154,16 @@ def _projected(page: str) -> list[dict]:
     for row in _player_rows(page):
         games = _number(row["cells"].get("GP*"))
         if not games:
-            out.append({"name": row["name"], "team": row["team"], "per_game": None})
+            out.append({"name": row["name"], "team": row["team"], "slot": row["slot"],
+                        "per_game": None})
             continue
         per_game = {}
         for head, keys in _PROJECTED.items():
             values = [_number(v) for v in row["cells"].get(head, "").split("/")]
             if len(values) == len(keys) and None not in values:
                 per_game.update({k: v / games for k, v in zip(keys, values)})
-        out.append({"name": row["name"], "team": row["team"], "per_game": per_game})
+        out.append({"name": row["name"], "team": row["team"], "slot": row["slot"],
+                    "per_game": per_game})
     return out
 
 
