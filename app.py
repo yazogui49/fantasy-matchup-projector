@@ -734,14 +734,16 @@ with tab_whatif:
             "Now": fmt(n["me"], n["is_pct"]),
             "With move": fmt(a["me"], a["is_pct"]),
             "Total change": f"{a['me'] - n['me']:+.3f}" if n["is_pct"] else f"{a['me'] - n['me']:+.0f}",
-            "Better than (teams)": f"{n['beats_pct']:.0%} → {a['beats_pct']:.0%}",
+            **({"Rank": f"{n['rank']} → {a['rank']} of {b_alt['league_size']}"} if real else
+               {"Better than (teams)": f"{n['beats_pct']:.0%} → {a['beats_pct']:.0%}"}),
         } for n, a in zip(b_now["categories"], b_alt["categories"])]),
             hide_index=True, width="stretch")
         st.caption(f"Now / With move = your team's projected totals {HORIZON_SPANS[horizon]} "
-                   f"({league_source(real, horizon)} × games, at most 10 a day). Better than = "
-                   + ("share of the other teams in your league" if real else
-                      "share of the simulated league's teams")
-                   + " you'd beat in that category."
+                   f"({league_source(real, horizon)} × games, at most 10 a day). "
+                   + ("Rank = where you'd place among your league's teams in that category, "
+                      "now → with the move." if real else
+                      "Better than = share of the simulated league's teams you'd beat in "
+                      "that category.")
                    + (" Injured players count at their averages, as if healthy."
                       if horizon == "season" else ""))
 
