@@ -159,7 +159,7 @@ def load_saved() -> dict:
     # Yahoo leagues as "league.team", e.g. y=3170.11,210575.9 and l = the one shown.
     leagues = [k for k in q.get("y", "").split(",") if re.fullmatch(r"\d+\.\d+", k)]
     yahoo = {"leagues": leagues, "league": q.get("l") if q.get("l") in leagues else ""}
-    if "me" in q or "opp" in q:
+    if q.keys() & {"me", "opp", "y", "w"}:
         return {"me": q.get("me", "").split(","), "opponent": q.get("opp", "").split(","),
                 "window": q.get("w", "season"), "games": decode_games(q.get("g", "")),
                 "sat": decode_sat(q.get("s", "")), **yahoo}
@@ -411,6 +411,9 @@ WINNER_TEXT = {"me": "Me", "opponent": "Opponent", "toss-up": "Toss-up"}
 # Yahoo only projects the players on this league's teams, so league comparisons (which
 # draft from every NBA player) use this season's stats instead.
 bench_window = "season" if window in YAHOO_WINDOWS else window
+YAHOO_BENCH_NOTE = (" Yahoo's projections only cover players on your league's teams, so this "
+                    "part uses this season's stats." if window in YAHOO_WINDOWS else "")
+HORIZON_SPANS = {"week": "this week", "season": "for the rest of the season"}
 
 
 def styled_winner(df: pd.DataFrame, winners: list[str], column: str):
@@ -591,16 +594,21 @@ with tab_whatif:
             "Better than (teams)": f"{n['beats_pct']:.0%} → {a['beats_pct']:.0%}",
         } for n, a in zip(b_now["categories"], b_alt["categories"])]),
             hide_index=True, width="stretch")
-        if horizon == "season":
-            st.caption("Rest of season: injured players count at their averages, as if healthy.")
+        st.caption(f"Now / With move = your team's projected totals {HORIZON_SPANS[horizon]} "
+                   f"({WINDOW_LABELS[bench_window].lower()} averages × games, at most 10 a day). "
+                   "Better than = share of the simulated league's teams you'd beat in that "
+                   "category." + YAHOO_BENCH_NOTE
+                   + (" Injured players count at their averages, as if healthy."
+                      if horizon == "season" else ""))
 
 with tab_league:
     league_horizon = st.radio("Over", list(HORIZONS), format_func=HORIZONS.get, horizontal=True,
                               key="league_horizon")
-    span = "this week" if league_horizon == "week" else "the rest of the season"
+    span = HORIZON_SPANS[league_horizon]
     st.caption("Your team against a typical 12-team league instead of just your opponent: "
                "100 simulated drafts of the best players, every team projected the same way "
-               f"({WINDOW_LABELS[bench_window].lower()} averages × games {span}, at most 10 a day).")
+               f"({WINDOW_LABELS[bench_window].lower()} averages × games "
+               f"{span}, at most 10 a day)." + YAHOO_BENCH_NOTE)
     bench_res = run_benchmark(tuple(me_ids), preset, week_start, bench_window, league_horizon,
                               CODE_VERSION)
     b1, b2, b3 = st.columns(3)
