@@ -255,6 +255,17 @@ def add_league(lid: str, tid: str) -> None:
     st.session_state["yahoo_link"] = ""
 
 
+def change_team(lid: str, widget: str) -> None:
+    """Swap the shown league's team for the one picked (keeping its place in the list)."""
+    old, new = st.session_state["league"], f"{lid}.{st.session_state[widget]}"
+    leagues = st.session_state["leagues"]
+    if new in leagues:  # that team is already saved: just switch to it
+        leagues.remove(old)
+    else:
+        leagues[leagues.index(old)] = new
+    st.session_state["league"] = new
+
+
 def remove_league() -> None:
     st.session_state["leagues"].remove(st.session_state["league"])
     st.session_state["league"] = next(iter(st.session_state["leagues"]), "")
@@ -272,6 +283,20 @@ if leagues:
     c1, c2 = st.columns([4, 1], vertical_alignment="bottom")
     c1.selectbox("League", leagues + [""], key="league", format_func=league_label)
     c2.button("Reload from Yahoo", on_click=reload_yahoo, width="stretch")
+if st.session_state["league"]:
+    with st.expander("Change team or remove this league"):
+        lid, tid = st.session_state["league"].split(".")
+        try:
+            info = yahoo_league(lid)
+        except yahoo_web.YahooError as e:
+            st.error(str(e))
+        else:
+            teams = list(info["teams"])
+            widget = f"my_team_{lid}"
+            st.session_state[widget] = tid  # follow the league picked above
+            st.selectbox(f"My team in {info['name']}", teams, key=widget,
+                         format_func=info["teams"].get, on_change=change_team, args=(lid, widget))
+        st.button("Remove this league", on_click=remove_league)
 with st.expander("Add a Yahoo league" if leagues else "Load your team from Yahoo",
                  expanded=not leagues):
     st.caption("Paste your league's (or your team's) link from Yahoo Fantasy Basketball. Your "
@@ -292,8 +317,6 @@ with st.expander("Add a Yahoo league" if leagues else "Load your team from Yahoo
                                 format_func=info["teams"].get, placeholder="Pick your team")
             st.button("Add league", type="primary", on_click=add_league, args=(lid, team),
                       disabled=team is None)
-    if st.session_state["league"]:
-        st.button("Remove this league", on_click=remove_league)
 
 titles = {"me": "My team", "opponent": "Opponent"}
 yahoo_teams: tuple[str, ...] = ()  # (league, my team, opponent) for Yahoo's projections
