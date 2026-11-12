@@ -4,14 +4,28 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import sys
 from datetime import date, timedelta
+from pathlib import Path
 
 import pandas as pd
 import requests
 import streamlit as st
 
-from projector import yahoo_web
+# Cached results are keyed on this too: st.cache_data only notices edits to the cached
+# function itself, so after a deploy that changes projector/ it would serve old results.
+CODE_VERSION = hashlib.md5(b"".join(
+    f.read_bytes() for f in sorted((Path(__file__).parent / "projector").glob("*.py")))).hexdigest()
+# After a deploy, Streamlit reruns this file but keeps the old projector modules in
+# memory, so importing anything new from them fails. Drop them when the code changed.
+if os.environ.get("PROJECTOR_CODE_VERSION") != CODE_VERSION:
+    for name in [m for m in sys.modules if m == "projector" or m.startswith("projector.")]:
+        del sys.modules[name]
+    os.environ["PROJECTOR_CODE_VERSION"] = CODE_VERSION
+
+from projector import yahoo_web  # noqa: E402 (after the reload above)
 from projector.benchmark import benchmark, player_averages, real_league
 from projector.config import ROOT
 from projector.league import PRESETS
@@ -30,11 +44,6 @@ WINDOW_LABELS = {
     "yahoo": "Yahoo projections",
 }
 WINNER_COLORS = {"me": "#1a7f37", "opponent": "#cf222e", "toss-up": "#9a6700"}
-
-# Cached results are keyed on this too: st.cache_data only notices edits to the cached
-# function itself, so after a deploy that changes projector/ it would serve old results.
-CODE_VERSION = hashlib.md5(b"".join(
-    f.read_bytes() for f in sorted((ROOT / "projector").glob("*.py")))).hexdigest()
 
 st.set_page_config(page_title="Matchup Projector", page_icon="🏀", layout="wide")
 
