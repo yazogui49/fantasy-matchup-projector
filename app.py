@@ -12,7 +12,7 @@ import requests
 import streamlit as st
 
 from projector import yahoo_web
-from projector.benchmark import benchmark
+from projector.benchmark import benchmark, player_averages, real_league
 from projector.config import ROOT
 from projector.league import PRESETS
 from projector.output import fmt
@@ -103,6 +103,41 @@ def yahoo_matchup(lid: str, tid: str, week: int | None) -> dict:
     me, missing = yahoo_web.match(yahoo_web.roster(lid, tid), directory)
     them, missing_opp = yahoo_web.match(yahoo_web.roster(lid, opp), directory) if opp else ([], [])
     return {"me": me, "opponent": them, "opponent_team": opp, "missing": missing + missing_opp}
+
+
+@st.cache_data(ttl=1800, show_spinner="Reading every team in your Yahoo league…")
+def yahoo_league_teams(lid: str, period: str) -> dict[str, dict]:
+    """Team id -> {'name', 'ids', 'projected': {id: Yahoo's per-game projection}}, for
+    every team in the league (one Yahoo page each)."""
+    directory = players_by_id()
+    teams = {}
+    for tid, name in yahoo_league(lid)["teams"].items():
+        players = yahoo_web.projections(lid, tid, period)
+        ids = yahoo_web.find(players, directory)
+        teams[tid] = {"name": name, "ids": [i for i in ids if i],
+                      "projected": {i: p["per_game"] for i, p in zip(ids, players)
+                                    if i and p["per_game"]}}
+    return teams
+
+
+@st.cache_data(ttl=3600, show_spinner="Comparing with your league…")
+def run_real_league(me: tuple[str, ...], preset: str, week_start: str, window: str,
+                    horizon: str, lid: str, tid: str, code: str) -> dict:
+    """`me` against the other teams of Yahoo league `lid`, standing in for team `tid`."""
+    directory = players_by_id()
+    # Yahoo projects the next 7 days or the rest of the season, not a Monday-Sunday week.
+    teams = yahoo_league_teams(lid, "rest" if horizon == "season" else "next7")
+    yahoo = window in YAHOO_WINDOWS
+    ids = list(dict.fromkeys(list(me) + [i for t in teams.values() for i in t["ids"]]))
+    per_game = player_averages(ids, "season" if yahoo else window, nba_today())
+    if yahoo:  # Yahoo has no minutes or 3-point attempts: those stay as this season's
+        for t in teams.values():
+            for pid, projected in t["projected"].items():
+                per_game[pid] = {**per_game.get(pid, {}), **projected}
+    return real_league([directory[i] for i in me],
+                       {k: {"name": t["name"], "ids": t["ids"]} for k, t in teams.items()},
+                       tid, directory, PRESETS[preset], date.fromisoformat(week_start),
+                       per_game, horizon)
 
 
 HORIZONS = {"season": "Rest of season", "week": "This week"}
@@ -320,6 +355,7 @@ with st.expander("Add a Yahoo league" if leagues else "Load your team from Yahoo
 
 titles = {"me": "My team", "opponent": "Opponent"}
 yahoo_teams: tuple[str, ...] = ()  # (league, my team, opponent) for Yahoo's projections
+league_name = ""
 if st.session_state["league"]:
     lid, tid = st.session_state["league"].split(".")
     try:
@@ -335,6 +371,7 @@ if st.session_state["league"]:
             st.session_state["me"], st.session_state["opponent"] = loaded["me"], loaded["opponent"]
             st.session_state["loaded_for"] = (lid, tid, yahoo_week)
         yahoo_teams = (lid, tid) + ((loaded["opponent_team"],) if loaded["opponent_team"] else ())
+        league_name = info["name"]
         titles["me"] += f" · {info['teams'].get(tid, '')}"
         if loaded["opponent_team"]:
             titles["opponent"] += f" · {info['teams'].get(loaded['opponent_team'], '')}"
@@ -411,9 +448,31 @@ WINNER_TEXT = {"me": "Me", "opponent": "Opponent", "toss-up": "Toss-up"}
 # Yahoo only projects the players on this league's teams, so league comparisons (which
 # draft from every NBA player) use this season's stats instead.
 bench_window = "season" if window in YAHOO_WINDOWS else window
-YAHOO_BENCH_NOTE = (" Yahoo's projections only cover players on your league's teams, so this "
-                    "part uses this season's stats." if window in YAHOO_WINDOWS else "")
 HORIZON_SPANS = {"week": "this week", "season": "for the rest of the season"}
+
+
+def vs_league(roster_ids: list[str], horizon: str) -> tuple[dict, bool]:
+    """(result, is it the real league?): the loaded Yahoo league's real teams, or a
+    simulated league when there's none (or Yahoo can't be read)."""
+    if yahoo_teams:
+        try:
+            return run_real_league(tuple(roster_ids), preset, week_start, window, horizon,
+                                   yahoo_teams[0], yahoo_teams[1], CODE_VERSION), True
+        except yahoo_web.YahooError as e:
+            st.warning(f"Couldn't read your league from Yahoo, so this uses a simulated one. ({e})")
+    return run_benchmark(tuple(roster_ids), preset, week_start, bench_window, horizon,
+                         CODE_VERSION), False
+
+
+def league_source(real: bool, horizon: str) -> str:
+    """How every team in the comparison is projected, for captions."""
+    if real and window in YAHOO_WINDOWS:
+        return ("Yahoo's rest-of-season projections" if horizon == "season" else
+                "Yahoo's per-game projections for the next 7 days")
+    note = ("" if real or window not in YAHOO_WINDOWS else
+            "; Yahoo's projections only cover players in your league, so a simulated one uses "
+            "this season's stats")
+    return f"{WINDOW_LABELS[bench_window].lower()} averages{note}"
 
 
 def styled_winner(df: pd.DataFrame, winners: list[str], column: str):
@@ -574,17 +633,19 @@ with tab_whatif:
                    + (" Trade with your opponent: they get the players you give."
                       if from_opp else ""))
 
-        st.markdown("**Against a typical league**")
         horizon = st.radio("Over", list(HORIZONS), format_func=HORIZONS.get, horizontal=True,
                            key="wi_horizon")
-        b_now = run_benchmark(tuple(me_ids), preset, week_start, bench_window, horizon, CODE_VERSION)
-        b_alt = run_benchmark(tuple(new_me), preset, week_start, bench_window, horizon, CODE_VERSION)
+        b_now, real = vs_league(me_ids, horizon)
+        b_alt, _ = vs_league(new_me, horizon)
+        st.markdown(f"**Against {league_name}**" if real else "**Against a typical league**")
+        approx = "" if real else "~"
         l1, l2, l3 = st.columns(3)
-        l1.metric(f"Rank of {b_alt['league_size']}", f"~{b_alt['rank']:g}",
-                  f"was ~{b_now['rank']:g}", delta_color="off")
+        l1.metric(f"Rank of {b_alt['league_size']}", f"{approx}{b_alt['rank']:g}",
+                  f"was {approx}{b_now['rank']:g}", delta_color="off")
         l2.metric("Matchups you'd win", f"{b_alt['matchup_win_pct']:.0%}",
                   f"{(b_alt['matchup_win_pct'] - b_now['matchup_win_pct']) * 100:+.0f} pts")
-        l3.metric("Categories vs a typical team", b_alt["expected_cats"],
+        l3.metric("Categories per matchup" if real else "Categories vs a typical team",
+                  b_alt["expected_cats"],
                   round(b_alt["expected_cats"] - b_now["expected_cats"], 1))
         st.dataframe(pd.DataFrame([{
             "Category": a["category"],
@@ -595,9 +656,10 @@ with tab_whatif:
         } for n, a in zip(b_now["categories"], b_alt["categories"])]),
             hide_index=True, width="stretch")
         st.caption(f"Now / With move = your team's projected totals {HORIZON_SPANS[horizon]} "
-                   f"({WINDOW_LABELS[bench_window].lower()} averages × games, at most 10 a day). "
-                   "Better than = share of the simulated league's teams you'd beat in that "
-                   "category." + YAHOO_BENCH_NOTE
+                   f"({league_source(real, horizon)} × games, at most 10 a day). Better than = "
+                   + ("share of the other teams in your league" if real else
+                      "share of the simulated league's teams")
+                   + " you'd beat in that category."
                    + (" Injured players count at their averages, as if healthy."
                       if horizon == "season" else ""))
 
@@ -605,17 +667,24 @@ with tab_league:
     league_horizon = st.radio("Over", list(HORIZONS), format_func=HORIZONS.get, horizontal=True,
                               key="league_horizon")
     span = HORIZON_SPANS[league_horizon]
-    st.caption("Your team against a typical 12-team league instead of just your opponent: "
-               "100 simulated drafts of the best players, every team projected the same way "
-               f"({WINDOW_LABELS[bench_window].lower()} averages × games "
-               f"{span}, at most 10 a day)." + YAHOO_BENCH_NOTE)
-    bench_res = run_benchmark(tuple(me_ids), preset, week_start, bench_window, league_horizon,
-                              CODE_VERSION)
+    bench_res, real = vs_league(me_ids, league_horizon)
+    how = (f"every team projected the same way ({league_source(real, league_horizon)} × games "
+           f"{span}, at most 10 a day)")
+    st.caption(f"Your team against the other teams in {league_name} instead of just your "
+               f"opponent: their current Yahoo rosters, {how}." if real else
+               "Your team against a typical 12-team league instead of just your opponent: "
+               f"100 simulated drafts of the best players, {how}.")
     b1, b2, b3 = st.columns(3)
-    b1.metric(f"Rank of {bench_res['league_size']}", f"~{bench_res['rank']:g}",
-              f"range {bench_res['rank_best']}–{bench_res['rank_worst']}", delta_color="off")
-    b2.metric("Matchups you'd win", f"{bench_res['matchup_win_pct']:.0%}")
-    b3.metric("Categories vs a typical team", bench_res["expected_cats"])
+    if real:
+        b1.metric(f"Rank of {bench_res['league_size']}", bench_res["rank"])
+        b2.metric("Matchups you'd win", f"{bench_res['matchup_win_pct']:.0%}",
+                  f"vs {bench_res['league_size'] - 1} teams", delta_color="off")
+        b3.metric("Categories per matchup", bench_res["expected_cats"])
+    else:
+        b1.metric(f"Rank of {bench_res['league_size']}", f"~{bench_res['rank']:g}",
+                  f"range {bench_res['rank_best']}–{bench_res['rank_worst']}", delta_color="off")
+        b2.metric("Matchups you'd win", f"{bench_res['matchup_win_pct']:.0%}")
+        b3.metric("Categories vs a typical team", bench_res["expected_cats"])
 
     def strength(beats: float) -> str:
         return "Strong" if beats >= 0.7 else "Weak" if beats <= 0.3 else "Average"
@@ -624,18 +693,35 @@ with tab_league:
     st.dataframe(pd.DataFrame([{
         "Category": c["category"],
         "You": fmt(c["me"], c["is_pct"]),
-        "Typical team": fmt(c["typical"], c["is_pct"]),
-        "Better than": f"{c['beats_pct']:.0%} of teams",
+        ("League median" if real else "Typical team"): fmt(c["typical"], c["is_pct"]),
+        **({"Rank": f"{c['rank']} of {bench_res['league_size']}"} if real else
+           {"Better than": f"{c['beats_pct']:.0%} of teams"}),
         "": level,
     } for c, level in zip(bench_res["categories"], levels)]).style.apply(
         lambda col: [f"color: {WINNER_COLORS[{'Strong': 'me', 'Weak': 'opponent'}.get(v, 'toss-up')]};"
                      " font-weight: 600" for v in col], subset=[""]),
         hide_index=True, width="stretch")
-    st.caption(f"Games {span}: you {bench_res['games']['me']}, typical team "
-               f"{bench_res['games']['typical']:g}. "
+    st.caption(f"Games {span}: you {bench_res['games']['me']}, "
+               + ("league median" if real else "typical team")
+               + f" {bench_res['games']['typical']:g}. "
                + ("Out players count as 0" if league_horizon == "week" else
                   "Injured players count at their averages, as if healthy")
                + "; the Plays overrides aren't applied here.")
+
+    if real:
+        st.markdown("**Projected standings**")
+        others = bench_res["league_size"] - 1
+        st.dataframe(pd.DataFrame([{
+            "": i,
+            "Team": t["name"],
+            f"Matchups won (of {others})": f"{t['matchups_won']:g}",
+            "Categories per matchup": t["expected_cats"],
+            "Games": t["games"],
+        } for i, t in enumerate(bench_res["teams"], 1)]).style.apply(
+            lambda row: ["font-weight: 700" if row["Team"] == "You" else ""] * len(row), axis=1),
+            hide_index=True, width="stretch")
+        st.caption(f"Every team against each of the other {others}, once, with the same "
+                   "projection: not your real schedule. You = your roster as it is above.")
 
 with tab_players:
     all_stats = st.toggle("Show all stats")

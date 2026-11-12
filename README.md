@@ -20,8 +20,9 @@ written back to Yahoo.
    are projected from makes and attempts, never averaged percentages.
 4. Category-by-category comparison; anything within 5% is a toss-up.
 5. Per-player games override for injuries/rest, and a next-week view.
-6. Vs league: where your roster ranks against a simulated 12-team league, this week or
-   over the rest of the season; What if shows the same for trades and pickups.
+6. Vs league: where your roster ranks against your real Yahoo league's teams (or, without
+   one, a simulated 12-team league), this week or over the rest of the season; What if
+   shows the same for trades and pickups.
 
 Yahoo data still to bring in (positions, real lineups, official totals, the real league)
 is listed in [YAHOO_TODO.md](YAHOO_TODO.md).
@@ -44,6 +45,6 @@ Data comes from ESPN's public endpoints and is cached in `cache/`.
 - `projector/stats.py`: game logs, averages per window, week-to-date totals
 - `projector/projection.py`: projection, slot limits, category comparison (JSON result)
 - `projector/yahoo_web.py`: rosters and matchups from public Yahoo league pages
-- `projector/benchmark.py`: simulated league drafts and ranking (Vs league tab)
+- `projector/benchmark.py`: real-league and simulated-league ranking (Vs league tab)
 - `projector/output.py`: text table; `app.py`: Streamlit UI
 - `projector/auth.py`: Yahoo OAuth (for when API access is approved)

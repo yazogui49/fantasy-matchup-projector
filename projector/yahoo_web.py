@@ -141,12 +141,13 @@ PROJECTION_PERIODS = {"next7": "PS7", "rest": "PSR"}
 
 
 def _projected(page: str) -> list[dict]:
-    """[{'name', 'team', 'per_game'}] from a projected-stats page: Yahoo's projected
-    totals divided by its projected games. Players with no games projected are left out."""
+    """[{'name', 'team', 'per_game'}] for every player on a projected-stats page: Yahoo's
+    projected totals divided by its projected games (None if no games are projected)."""
     out = []
     for row in _player_rows(page):
         games = _number(row["cells"].get("GP*"))
         if not games:
+            out.append({"name": row["name"], "team": row["team"], "per_game": None})
             continue
         per_game = {}
         for head, keys in _PROJECTED.items():
@@ -158,15 +159,16 @@ def _projected(page: str) -> list[dict]:
 
 
 def projections(lid: str, tid: str, period: str = "next7") -> list[dict]:
-    """Yahoo's projected per-game stats over a period: the next 7 days from today, or
-    the rest of the season."""
+    """A team's whole roster with Yahoo's projected per-game stats over a period (the
+    next 7 days from today, or the rest of the season); per_game None = no games."""
     return _projected(_page(f"{lid}/{tid}?stat1=P&stat2={PROJECTION_PERIODS[period]}"))
 
 
 def day_projections(lid: str, tid: str, day: str) -> list[dict]:
     """Yahoo's projection for one day (YYYY-MM-DD), for the players with a game that
     day: it accounts for that game's opponent. Yahoo projects next week's days too."""
-    return _projected(_page(f"{lid}/{tid}/team?date={day}&stat1=P&stat2=P"))
+    return [p for p in _projected(_page(f"{lid}/{tid}/team?date={day}&stat1=P&stat2=P"))
+            if p["per_game"]]
 
 
 def find(players: list[dict], directory: dict[str, dict]) -> list[str | None]:

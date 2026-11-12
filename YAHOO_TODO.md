@@ -11,6 +11,9 @@ Done:
 - **Yahoo's projections** as a "Project using" option: Yahoo's projection for each
   remaining day's game (so it knows the opponent); the app's schedule and overrides
   decide which games count.
+- **Vs league with my real league**: the "Vs league" tab and What if compare against the
+  league's actual teams (their current Yahoo rosters), with projected standings. With
+  Yahoo projections on, every team uses Yahoo's rest-of-season (or next-7-days) numbers.
 
 Possible from the public pages, not built yet:
 1. **Real position eligibility**: team pages list Yahoo's positions (e.g. "LAC - PG,SG").
@@ -22,11 +25,9 @@ Possible from the public pages, not built yet:
 4. **Official totals so far**: the matchup page has Yahoo's category totals for the week.
 5. **League settings**: categories and roster slots from the league's settings page,
    instead of the `standard-9cat` preset.
-6. **Vs league with my real league**: every team's roster is public, so the "Vs league"
-   tab can use the actual teams instead of simulated ones.
-7. **Free agents in What if**: only offer players not on any team in the league.
-8. **Yahoo's rest-of-season projections** (`projections(..., "rest")` already reads them)
-   for Vs league and What if over the rest of the season.
+6. **Free agents in What if**: only offer players not on any team in the league.
+7. **Real schedule in Vs league standings**: the standings play everyone once; the
+   league's actual remaining matchups are on Yahoo's schedule page.
 
 Still needs the API (or a login):
 - Private leagues.

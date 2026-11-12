@@ -1,6 +1,6 @@
-"""Where a roster stands against a typical league, not just this week's opponent.
+"""Where a roster stands against a whole league, not just this week's opponent.
 
-Until Yahoo gives us the real league, simulate one: rank players by 9-cat value,
+With a Yahoo league loaded, against its real teams (`real_league`). Otherwise simulate one: rank players by 9-cat value,
 snake-draft them into 12 teams (with some noise, since real drafts aren't by the
 book), and compare everyone's full week on the same footing: per-game averages from
 the chosen window x games that week, at most `slots` players counted per day."""
@@ -194,4 +194,75 @@ def benchmark(roster: list[dict], directory: dict[str, dict], settings: LeagueSe
         "rank_best": int(min(ranks)), "rank_worst": int(max(ranks)),
         "league_size": TEAMS,
         "games": {"me": mine["games"], "typical": float(np.median([t["games"] for t in all_teams]))},
+    }
+
+
+def player_averages(ids: list[str], window: str, today: date) -> dict[str, dict]:
+    """Player id -> per-game stats for the window. Whole seasons come from one
+    all-player request (falling back to the other season), recent windows from game logs."""
+    if window in ("season", "lastseason"):
+        this_season = season_averages()
+        last = season_averages(today.year - 1 if today.month < 8 else today.year)
+        first, second = (this_season, last) if window == "season" else (last, this_season)
+        return {pid: (first.get(pid) or second[pid])["per_game"] for pid in ids
+                if pid in first or pid in second}
+    with ThreadPoolExecutor(8) as ex:
+        results = ex.map(lambda pid: averages(pid, window, today), ids)
+    return {pid: r["per_game"] for pid, r in zip(ids, results)}
+
+
+def real_league(roster: list[dict], teams: dict[str, dict], my_team: str,
+                directory: dict[str, dict], settings: LeagueSettings, day: date,
+                per_game: dict[str, dict], horizon: str = "week") -> dict:
+    """Compare `roster` with a real league's other teams. `teams`: team id ->
+    {'name', 'ids'}; `my_team` is the one `roster` stands in for (so trades and pickups
+    can be tried). `per_game`: player id -> per-game stats. Every team is projected the
+    same way as in `benchmark`; the result has the same keys, plus 'teams' (standings)."""
+    schedule = week_games(day) if horizon == "week" else season_games()
+    slots = len(settings.starting_slots)
+    skip_out = horizon == "week"  # as in benchmark: Out players only miss this week
+
+    def players(ids: list[str]) -> list[dict]:
+        return [{"id": pid, "team": directory[pid]["team"], "per_game": per_game.get(pid, {})}
+                for pid in ids if pid in directory
+                and not (skip_out and directory[pid]["injury"] == "Out")]
+
+    # A trade: players on `roster` leave the team they're on, and the team that gave the
+    # most gets the players from my Yahoo team that `roster` no longer has.
+    mine = {p["id"] for p in roster}
+    given = [pid for pid in teams.get(my_team, {}).get("ids", []) if pid not in mine]
+    others = {tid: t for tid, t in teams.items() if tid != my_team}
+    taken = {tid: len(mine & set(t["ids"])) for tid, t in others.items()}
+    partner = max(taken, key=taken.get) if any(taken.values()) else None
+    rosters = [[pid for pid in t["ids"] if pid not in mine] + (given if tid == partner else [])
+               for tid, t in others.items()]
+    totals = [_week_totals(players(list(mine)), schedule, slots)]
+    totals += [_week_totals(players(ids), schedule, slots) for ids in rosters]
+    m = _cat_matrix(totals, settings)
+    h2h = _h2h(m, m)
+    np.fill_diagonal(h2h, 0)
+    record = h2h.sum(1)  # matchups won against the rest of the league
+    # cats[i, k, j]: team i vs team k in category j (1 win, 0.5 tie, 0 loss), self left out.
+    cats = (m[:, None, :] > m[None, :, :]) + 0.5 * (m[:, None, :] == m[None, :, :])
+    cats = cats[~np.eye(len(m), dtype=bool)].reshape(len(m), len(m) - 1, -1)
+
+    categories = []
+    for j, cat in enumerate(settings.categories):
+        categories.append({"category": cat.name, "is_pct": cat.is_pct, "me": cat.value(totals[0]),
+                           "typical": float(np.median([cat.value(t) for t in totals[1:]])),
+                           "beats_pct": round(float(cats[0, :, j].mean()), 3),
+                           "rank": 1 + int(np.sum(m[1:, j] > m[0, j]))})
+    rank = 1 + int(np.sum(record[1:] > record[0]))
+    names = ["You"] + [t["name"] for t in others.values()]
+    return {
+        "categories": categories,
+        "expected_cats": round(sum(c["beats_pct"] for c in categories), 1),
+        "matchup_win_pct": round(float(record[0] / len(others)), 3),
+        "rank": rank, "rank_best": rank, "rank_worst": rank,
+        "league_size": len(totals),
+        "games": {"me": totals[0]["games"], "typical": float(np.median([t["games"] for t in totals[1:]]))},
+        "teams": sorted(({"name": n, "is_me": i == 0, "matchups_won": float(record[i]),
+                          "expected_cats": round(float(cats[i].sum(1).mean()), 1),
+                          "games": totals[i]["games"]}
+                         for i, n in enumerate(names)), key=lambda t: -t["matchups_won"]),
     }
